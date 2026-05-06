@@ -509,23 +509,20 @@ class CreditNoteDialog(QDialog):
         self.table.blockSignals(False)
         
         # ── Sync Tax Rows with tax_map ────────────────────────────────────────
-        # Identify which tax ledgers we need based on tax_map
-        needed_ledgers = [] # list of (ledger_dict, amount)
+        # Group needed tax amounts by ledger ID to prevent duplicates
+        needed_grouped = {} # ledger_id -> (ledger_dict, total_amt)
         for (ttype, trate), tamount in tax_map.items():
             if tamount <= 0: continue
             
             rate_val = float(trate)
             rate_str = str(int(rate_val)) if rate_val == int(rate_val) else str(rate_val)
             
-            # Find best matching ledger in master
             match = None
-            # Preference 1: Exact match with rate in name and "Sales" or "Output"
             for l in self._ledgers:
                 if not self._is_dt_group.get(l.get("group")): continue
                 ln = l["name"].upper()
                 if ttype in ln and rate_str in ln and ("SALES" in ln or "OUTPUT" in ln):
                     match = l; break
-            # Preference 2: Any D&T match with type and rate
             if not match:
                 for l in self._ledgers:
                     if not self._is_dt_group.get(l.get("group")): continue
@@ -534,24 +531,30 @@ class CreditNoteDialog(QDialog):
                         match = l; break
             
             if match:
-                needed_ledgers.append((match, round(tamount, 2)))
+                lid = match["_id"]
+                if lid in needed_grouped:
+                    needed_grouped[lid] = (match, needed_grouped[lid][1] + tamount)
+                else:
+                    needed_grouped[lid] = (match, tamount)
+
+        final_needed = list(needed_grouped.values())
 
         # Sync existing rows (both auto and manual)
         for row in list(self._tax_rows):
             l_id = row["cb"].currentData()
-            match_data = next((x for x in needed_ledgers if x[0]["_id"] == l_id), None)
+            match_data = next((x for x in final_needed if x[0]["_id"] == l_id), None)
             
             if match_data:
                 nl, namt = match_data
                 row["amt"].setValue(namt)
                 row["is_auto_tax"] = True # We take control of it
-                needed_ledgers.remove(match_data)
+                final_needed.remove(match_data)
             elif row.get("is_auto_tax"):
                 # It was auto-added but no longer needed
                 self._remove_tax_row(row)
 
         # Add new rows for remaining needed ledgers
-        for nl, namt in needed_ledgers:
+        for nl, namt in final_needed:
             new_row = self._add_tax_row(ledger_id=nl["_id"])
             new_row["is_auto_tax"] = True
             new_row["amt"].setValue(namt)
