@@ -35,6 +35,7 @@ NAV_ITEMS: list[tuple[str, str, str]] = [
     ("frontend/assets/icons/file-text.svg", "Ledger Statement", ""),
     ("frontend/assets/icons/package.svg", "Inventory",        ""),
     ("frontend/assets/icons/layers.svg", "Balance Sheet",   ""),
+    ("frontend/assets/icons/settings.svg", "Settings",      ""),
 ]
 
 

@@ -16,6 +16,7 @@ from frontend.pages.profit_loss import ProfitLossPage
 from frontend.pages.ledger_report import LedgerReportPage
 from frontend.pages.inventory import InventoryPage
 from frontend.pages.balance_sheet import BalanceSheetPage
+from frontend.pages.settings import SettingsPage
 from frontend.components.sidebar import Sidebar
 from frontend.components.header import HeaderBar, DARK_QSS
 from frontend.theme import THEME, GLOBAL_QSS
@@ -32,6 +33,7 @@ _PAGE_META = {
     6: ("Ledger Statement", "Reports  ›  Ledger Statement"),
     7: ("Inventory",        "Home  ›  Inventory"),
     8: ("Balance Sheet",    "Reports  ›  Balance Sheet"),
+    9: ("Settings",         "Home  ›  Settings"),
 }
 
 
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
             LedgerReportPage(),
             InventoryPage(),
             BalanceSheetPage(),
+            SettingsPage(),
         ]
         for p in self.page_list:
             self.pages.addWidget(p)
@@ -158,6 +161,10 @@ class MainWindow(QMainWindow):
         sc_rep = QShortcut(QKeySequence("Alt+S"), self)
         sc_rep.activated.connect(lambda: self._navigate_to(6))
         
+        # Alt+G → Settings
+        sc_sett = QShortcut(QKeySequence("Alt+G"), self)
+        sc_sett.activated.connect(lambda: self._navigate_to(9))
+        
         # Ctrl+M → Toggle Sidebar
         sc_side = QShortcut(QKeySequence("Ctrl+M"), self)
         sc_side.activated.connect(self.sidebar.toggle)
@@ -190,6 +197,8 @@ class MainWindow(QMainWindow):
         name    = session.company_name or ""
         fy_from = session.fiscal_year_from or ""
         fy_to   = session.fiscal_year_to   or ""
+        p_from  = session.period_from or ""
+        p_to    = session.period_to   or ""
 
         display_name = name or "No company selected"
 
@@ -197,7 +206,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_active_company(display_name)
 
         # Top header badge
-        self.header.set_company(name, fy_from, fy_to)
+        self.header.set_company(name, fy_from, fy_to, p_from, p_to)
 
         # Window title
         self.setWindowTitle(
@@ -207,9 +216,10 @@ class MainWindow(QMainWindow):
         # Status bar
         self._co_lbl.setText(display_name)
         
-        if fy_from and fy_to:
+        # In status bar, show Active Period
+        if p_from and p_to:
             self._fy_lbl.setText(
-                f" FY: {fy_from[:7]} → {fy_to[:7]}"
+                f" Period: {p_from[:10]} → {p_to[:10]}"
             )
             self._fy_icon.setVisible(True)
         else:

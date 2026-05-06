@@ -175,3 +175,19 @@ def stock_summary(**kw):
     if c: kw["company_id"] = c
     return _get("/inventory/stock-summary", params=kw)
 
+
+# Settings (Backup/Restore)
+def backup_company(company_id):
+    params = {"company_id": company_id}
+    r = requests.get(BASE_URL + "/settings/backup", params=params, timeout=30)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Disposition", "")
+
+
+def restore_company(company_id, file_path):
+    params = {"company_id": company_id}
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        r = requests.post(BASE_URL + "/settings/restore", params=params, files=files, timeout=30)
+    r.raise_for_status()
+    return r.json()

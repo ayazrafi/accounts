@@ -46,7 +46,9 @@ def add_voucher():
             entries=data["entries"],
             company_id=data["company_id"],
             reference_type=ref_type,
-            grand_total=data.get("grand_total")
+            grand_total=data.get("grand_total"),
+            invoice_items=data.get("invoice_items"),
+            metadata=data.get("metadata")
         )
         
         # Handle linking if provided directly to this route
@@ -83,6 +85,8 @@ def edit_voucher(voucher_id):
             narration=data.get("narration", ""),
             entries=data["entries"],
             grand_total=data.get("grand_total"),
+            invoice_items=data.get("invoice_items"),
+            metadata=data.get("metadata")
         )
         # Handle re-linking
         linking = data.get("linking")

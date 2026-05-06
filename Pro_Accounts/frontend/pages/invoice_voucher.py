@@ -10,8 +10,8 @@ from PySide6.QtCore import Qt, QDate, QSize, Signal, QTimer, QEvent, QObject
 import frontend.api_client as api
 from frontend.utils import setup_enter_nav, SearchableComboBox, wire_create_new, wire_edit_selected, DateEdit, get_icon, format_indian_number, format_inr
 
-INVOICE_TYPES = {"Sales", "Purchase"}
-JOURNAL_TYPES = {"Payment", "Receipt", "Journal", "Contra", "Debit Note", "Credit Note"}
+INVOICE_TYPES = {"Sales", "Purchase", "Credit Note", "Debit Note"}
+JOURNAL_TYPES = {"Payment", "Receipt", "Journal", "Contra"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,12 +40,7 @@ class InvoiceItemRow(QWidget):
                 data = dlg.get_data()
                 try:
                     resp = api.create_stock_item(data)
-                    new_item = {
-                        "_id":      resp.get("id", ""),
-                        "name":     data["name"],
-                        "unit":     data.get("unit", "PCS"),
-                        "gst_rate": data.get("gst_rate", 0),
-                    }
+                    new_item = {**data, "_id": resp.get("id", "")}
                     self._items.append(new_item)
                     return (data["name"], new_item)
                 except Exception as ex:
@@ -55,7 +50,12 @@ class InvoiceItemRow(QWidget):
 
         def _edit_item_row(item_data):
             from frontend.pages.inventory import StockItemDialog
-            dlg = StockItemDialog(self.window(), item_data)
+            # Fetch full item record to ensure all fields are present
+            try:
+                full_item = api.get_stock_item(item_data["_id"])
+            except Exception:
+                full_item = item_data
+            dlg = StockItemDialog(self.window(), full_item)
             if dlg.exec():
                 data = dlg.get_data()
                 try:
@@ -204,12 +204,7 @@ class ItemEntryDialog(QDialog):
                 data = dlg.get_data()
                 try:
                     resp = api.create_stock_item(data)
-                    new_item = {
-                        "_id":      resp.get("id", ""),
-                        "name":     data["name"],
-                        "unit":     data.get("unit", "PCS"),
-                        "gst_rate": data.get("gst_rate", 0),
-                    }
+                    new_item = {**data, "_id": resp.get("id", "")}
                     self._items.append(new_item)
                     return (data["name"], new_item)
                 except Exception as ex:
@@ -219,7 +214,12 @@ class ItemEntryDialog(QDialog):
 
         def _edit_item_dlg(item_data):
             from frontend.pages.inventory import StockItemDialog
-            dlg = StockItemDialog(self, item_data)
+            # Fetch full item record to ensure all fields are present
+            try:
+                full_item = api.get_stock_item(item_data["_id"])
+            except Exception:
+                full_item = item_data
+            dlg = StockItemDialog(self, full_item)
             if dlg.exec():
                 data = dlg.get_data()
                 try:
@@ -435,15 +435,19 @@ QToolButton#qt_calendar_nextmonth {
         # Party + Ledger
         grid = QGridLayout()
         grid.setContentsMargins(0,6,0,6)
-        party_label = "Party" if vtype == "Sales" else "Supplier"
-        ledger_label = "Sales Ledger" if vtype == "Sales" else "Purchase Ledger"
-        
         if vtype == "Sales":
-            grid.addWidget(QLabel("Party A/c Name (Debtor):"), 0, 0)
-            grid.addWidget(QLabel("Sales Ledger:"), 1, 0)
+            party_label, ledger_label = "Party A/c Name (Debtor)", "Sales Ledger"
+        elif vtype == "Purchase":
+            party_label, ledger_label = "Party A/c Name (Creditor)", "Purchase Ledger"
+        elif vtype == "Credit Note":
+            party_label, ledger_label = "Party A/c Name (Customer)", "Sales Return Ledger"
+        elif vtype == "Debit Note":
+            party_label, ledger_label = "Party A/c Name (Supplier)", "Purchase Return Ledger"
         else:
-            grid.addWidget(QLabel("Party A/c Name (Creditor):"), 0, 0)
-            grid.addWidget(QLabel("Purchase Ledger:"), 1, 0)
+            party_label, ledger_label = "Party A/c Name", "Ledger Account"
+        
+        grid.addWidget(QLabel(f"{party_label}:"), 0, 0)
+        grid.addWidget(QLabel(f"{ledger_label}:"), 1, 0)
 
         self.party_cb = SearchableComboBox(); self.party_cb.setMinimumWidth(280)
         self.party_cb.addItem(f"Select {party_label}", None)
@@ -652,7 +656,7 @@ QToolButton#qt_calendar_nextmonth {
         # Ledger entries: first entry = party (Dr for Sales), second = sales ledger (Cr)
         items = existing.get("items", [])
         # Determine party and ledger entries based on vtype
-        if self.vtype == "Sales":
+        if self.vtype in ["Sales", "Debit Note"]:
             party_entry  = next((e for e in items if e["dr_cr"] == "Dr"), None)
             ledger_entry = next((e for e in items if e["dr_cr"] == "Cr" and e != party_entry), None)
         else:
@@ -722,8 +726,14 @@ QToolButton#qt_calendar_nextmonth {
         self._refresh_totals()
 
     def _dr_cr_for_ledger(self, ledger_dict):
-        """Return 'Cr' for Liability/Income groups, 'Dr' for Asset/Expense."""
-        nature = self._group_nature.get(ledger_dict.get("group", ""), "")
+        """Return 'Cr' or 'Dr' based on ledger nature and voucher context."""
+        group_id = str(ledger_dict.get("group", ""))
+        
+        # Taxes follow the voucher type direction
+        if getattr(self, "_is_dt_group", {}).get(group_id, False):
+            return "Cr" if self.vtype in ["Sales", "Debit Note"] else "Dr"
+            
+        nature = self._group_nature.get(group_id, "")
         return "Cr" if nature in ("Liability", "Income") else "Dr"
 
     def _add_tax_row(self, placeholder="-- Select Ledger --", auto_fill=False):
@@ -1022,50 +1032,27 @@ QToolButton#qt_calendar_nextmonth {
     def _add_item_row(self):
         dlg = ItemEntryDialog(self, self._items, self._units)
         if dlg.exec():
-            self._invoice_items.append(dlg.get_data())
-            self._refresh_items_table()
-            self._refresh_totals()
-
-    def _edit_item_row(self, index):
-        row = index.row()
-        if 0 <= row < len(self._invoice_items):
-            dlg = ItemEntryDialog(self, self._items, self._units,
-                                  existing=self._invoice_items[row])
-            if dlg.exec():
-                self._invoice_items[row] = dlg.get_data()
-                self._refresh_items_table()
-                self._refresh_totals()
-
-    def _remove_item(self, idx):
-        if 0 <= idx < len(self._invoice_items):
-            self._invoice_items.pop(idx)
-            self._refresh_items_table()
-            self._refresh_totals()
-
-    def _add_item_row(self):
-        dlg = ItemEntryDialog(self, self._items, self._units)
-        if dlg.exec():
             data = dlg.get_data()
             if data:
                 self._invoice_items.append(data)
                 self._refresh_items_table()
                 self._refresh_totals()
 
-    def _edit_item_row(self):
-        idx = self.items_table.currentRow()
-        if idx >= 0:
-            self._edit_item_row_at(idx)
-
-    def _edit_item_row_at(self, idx):
-        if idx < 0 or idx >= len(self._invoice_items): return
-        existing = self._invoice_items[idx]
-        dlg = ItemEntryDialog(self, self._items, self._units, existing=existing)
-        if dlg.exec():
-            data = dlg.get_data()
-            if data:
-                self._invoice_items[idx] = data
-                self._refresh_items_table()
-                self._refresh_totals()
+    def _edit_item_row(self, index=None):
+        if index is not None:
+            row = index.row()
+        else:
+            row = self.items_table.currentRow()
+            
+        if 0 <= row < len(self._invoice_items):
+            existing = self._invoice_items[row]
+            dlg = ItemEntryDialog(self, self._items, self._units, existing=existing)
+            if dlg.exec():
+                data = dlg.get_data()
+                if data:
+                    self._invoice_items[row] = data
+                    self._refresh_items_table()
+                    self._refresh_totals()
 
     def _remove_item(self, idx):
         if 0 <= idx < len(self._invoice_items):
@@ -1122,9 +1109,27 @@ QToolButton#qt_calendar_nextmonth {
         self._refresh_totals()
 
     def _find_ledger_by_name(self, name):
+        # 1. Exact match
         for l in self._ledgers:
             if l["name"].strip().lower() == name.strip().lower():
                 return l
+                
+        # 2. Loose match for tax ledgers (e.g., "Output CGST@9%", "CGST 9%")
+        lname_upper = name.strip().upper()
+        if "CGST" in lname_upper or "SGST" in lname_upper or "IGST" in lname_upper:
+            parts = lname_upper.split()
+            if len(parts) > 1:
+                prefix = parts[0] # "SALES" or "PURCHASE"
+                tax_suffix = parts[-1] # "CGST@9%"
+                for l in self._ledgers:
+                    l_upper = l["name"].strip().upper()
+                    if tax_suffix in l_upper:
+                        # Prevent picking Purchase tax for Sales and vice-versa
+                        if prefix == "SALES" and ("PURCHASE" in l_upper or "INPUT" in l_upper):
+                            continue
+                        if prefix == "PURCHASE" and ("SALES" in l_upper or "OUTPUT" in l_upper):
+                            continue
+                        return l
         return None
 
     def _on_item_row_changed(self):
@@ -1169,7 +1174,7 @@ QToolButton#qt_calendar_nextmonth {
         
         # Identify which tax ledgers we NEED
         needed_ledgers = [] # list of (ledger_dict, amount)
-        prefix = "Sales" if self.vtype == "Sales" else "Purchase"
+        prefix = "Sales" if self.vtype in ["Sales", "Credit Note"] else "Purchase"
         
         for (ttype, trate), tamount in tax_summary.items():
             if is_intra and ttype in ("CGST", "SGST"):
@@ -1220,7 +1225,7 @@ QToolButton#qt_calendar_nextmonth {
                 l = next((x for x in self._ledgers if x["_id"] == l_id), None)
                 if l:
                     dr_cr = self._dr_cr_for_ledger(l)
-                    if self.vtype == "Sales":
+                    if self.vtype in ["Sales", "Debit Note"]:
                         grand += amt if dr_cr == "Cr" else -amt
                     else:
                         grand += amt if dr_cr == "Dr" else -amt
@@ -1270,6 +1275,12 @@ QToolButton#qt_calendar_nextmonth {
         items = self._invoice_items
         if not items:
             QMessageBox.warning(self, "Error", "Add at least one item with Qty > 0"); return
+        # Date Validation
+        import frontend.session as session
+        ok, err = session.is_date_in_period(self.date_edit.date())
+        if not ok:
+            QMessageBox.warning(self, "Out of Range", err); return
+
         reply = QMessageBox.question(
             self, "Confirm Save",
             f"Save {self.vtype} voucher?",
@@ -1295,7 +1306,7 @@ QToolButton#qt_calendar_nextmonth {
             if not l:
                 continue
             dr_cr = self._dr_cr_for_ledger(l)
-            if self.vtype == "Sales":
+            if self.vtype in ["Sales", "Debit Note"]:
                 grand += amt if dr_cr == "Cr" else -amt
             else:
                 grand += amt if dr_cr == "Dr" else -amt
@@ -1307,7 +1318,7 @@ QToolButton#qt_calendar_nextmonth {
         ledger_name= self.ledger_cb.currentText()
         date_str   = self.date_edit.date().toString("yyyy-MM-dd")
 
-        if self.vtype == "Sales":
+        if self.vtype in ["Sales", "Debit Note"]:
             entries = [
                 {"ledger_id": party_id,  "ledger_name": party_name,  "dr_cr": "Dr", "amount": grand},
                 {"ledger_id": ledger_id, "ledger_name": ledger_name, "dr_cr": "Cr", "amount": subtotal},

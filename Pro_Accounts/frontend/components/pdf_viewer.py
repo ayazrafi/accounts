@@ -291,12 +291,14 @@ class InvoicePdfViewer(QDialog):
         """
 
         for i, item in enumerate(items, 1):
-            q = item.get('qty', 0); r = item.get('rate', 0)
+            name = item.get('item_name', item.get('name', 'Unknown Item'))
+            q = float(item.get('qty', 0.0) or 0.0)
+            r = float(item.get('rate', 0.0) or 0.0)
             line_amt = q * r
             html += f"""
                                 <tr>
                                     <td class="padding-xs text-center" style="font-size:11px;">{i}</td>
-                                    <td class="padding-xs" style="font-size:11px;"><b>{item.get('item_name','')}</b></td>
+                                    <td class="padding-xs" style="font-size:11px;"><b>{escape(name)}</b></td>
                                     <td class="padding-xs text-center" style="font-size:11px;">{item.get('hsn_sac', item.get('hsn_code','')) or '—'}</td>
                                     <td class="padding-xs text-center" style="font-size:11px;">{q:g}</td>
                                     <td class="padding-xs text-center" style="font-size:11px;">{item.get('unit','')}</td>
@@ -477,17 +479,18 @@ class InvoicePdfViewer(QDialog):
 
         rows = ""
         for i, item in enumerate(items, 1):
+            name = item.get('item_name', item.get('name', 'Unknown Item'))
             qty = float(item.get("qty", 0.0) or 0.0)
             rate = float(item.get("rate", 0.0) or 0.0)
             amount = qty * rate
             rows += f"""
                 <tr>
                     <td class="center">{i}</td>
-                    <td><b>{escape(item.get('item_name', ''))}</b></td>
+                    <td colspan="2"><b>{escape(name)}</b></td>
                     <td class="center">{escape(str(item.get('hsn_sac', item.get('hsn_code', '')) or ''))}</td>
                     <td class="right"><b>{qty:g}</b></td>
-                    <td class="right">{format_indian_number(rate)}</td>
                     <td class="center">{escape(item.get('unit', ''))}</td>
+                    <td class="right">{format_indian_number(rate)}</td>
                     <td class="right"><b>{format_indian_number(amount)}</b></td>
                 </tr>
             """
@@ -496,7 +499,7 @@ class InvoicePdfViewer(QDialog):
         for name, amount, _ in ctx["adjustments"]:
             adjustment_rows += f"""
                 <tr class="adjustment">
-                    <td colspan="6" class="right"><b>{escape(name)}</b></td>
+                    <td colspan="7" class="right"><b>{escape(name)}</b></td>
                     <td class="right"><b>{format_indian_number(amount)}</b></td>
                 </tr>
             """
@@ -548,17 +551,18 @@ class InvoicePdfViewer(QDialog):
                 <tr><td colspan="2">Dispatched through</td><td colspan="2">Destination</td></tr>
                 <tr><td colspan="4">Terms of Delivery</td></tr>
                 <tr>
-                    <th style="width:6%;">Sl<br>No.</th>
-                    <th colspan="2">Description of Services</th>
-                    <th>HSN/SAC</th>
-                    <th>Quantity</th>
-                    <th>Rate<br>per</th>
-                    <th>Amount</th>
+                    <th style="width:5%;">Sl<br>No.</th>
+                    <th colspan="2" style="width:35%;">Description of Goods</th>
+                    <th style="width:12%;">HSN/SAC</th>
+                    <th style="width:10%;">Quantity</th>
+                    <th style="width:10%;">Unit</th>
+                    <th style="width:12%;">Rate</th>
+                    <th style="width:16%;">Amount</th>
                 </tr>
                 <tbody class="items">{rows}<tr class="blank-row"><td colspan="7"></td></tr></tbody>
                 {adjustment_rows}
                 <tr class="total">
-                    <td colspan="4" class="right">Total</td>
+                    <td colspan="5" class="right">Total</td>
                     <td class="right">{sum(float(it.get('qty', 0.0) or 0.0) for it in items):g}</td>
                     <td></td>
                     <td class="right">{format_inr(grand_total, symbol='Rs ')}</td>
@@ -599,21 +603,23 @@ class InvoicePdfViewer(QDialog):
         party_name = escape(ctx["party_name"] or "Party Name")
         rows = ""
         for i, item in enumerate(items, 1):
+            name = item.get('item_name', item.get('name', 'Unknown Item'))
             qty = float(item.get("qty", 0.0) or 0.0)
             rate = float(item.get("rate", 0.0) or 0.0)
             rows += f"""
                 <tr>
                     <td class="center">{i}</td>
-                    <td>{escape(item.get('item_name', ''))}</td>
+                    <td>{escape(name)}</td>
                     <td class="center">{escape(str(item.get('hsn_sac', item.get('hsn_code', '')) or ''))}</td>
                     <td class="right">{qty:g}</td>
+                    <td class="center">{escape(item.get('unit', ''))}</td>
                     <td class="right">{format_indian_number(rate)}</td>
                     <td class="right">{format_indian_number(qty * rate)}</td>
                 </tr>
             """
 
         for name, amount, _ in ctx["adjustments"]:
-            rows += f'<tr><td colspan="5" class="right"><b>{escape(name)}</b></td><td class="right">{format_indian_number(amount)}</td></tr>'
+            rows += f'<tr><td colspan="6" class="right"><b>{escape(name)}</b></td><td class="right">{format_indian_number(amount)}</td></tr>'
 
         return f"""
         <html>
@@ -661,16 +667,17 @@ class InvoicePdfViewer(QDialog):
                 </table>
                 <table class="items">
                     <tr>
-                        <th style="width:6%;">S.N.</th>
+                        <th style="width:5%;">S.N.</th>
                         <th>Description of Goods</th>
-                        <th style="width:14%;">HSN/SAC</th>
-                        <th style="width:10%;">Qty</th>
+                        <th style="width:12%;">HSN/SAC</th>
+                        <th style="width:8%;">Qty</th>
+                        <th style="width:8%;">Unit</th>
                         <th style="width:12%;">Rate</th>
-                        <th style="width:16%;">Amount</th>
+                        <th style="width:15%;">Amount</th>
                     </tr>
                     {rows}
                     <tr class="spacer"><td colspan="6"></td></tr>
-                    <tr class="total"><td colspan="5" class="right">Grand Total</td><td class="right">{format_inr(ctx['grand_total'], symbol='Rs ')}</td></tr>
+                    <tr class="total"><td colspan="6" class="right">Grand Total</td><td class="right">{format_inr(ctx['grand_total'], symbol='Rs ')}</td></tr>
                 </table>
                 <div style="border:1px solid #111;border-top:none;padding:8px;font-size:12px;"><b>Rupees {escape(self._amount_words(ctx['grand_total']))} Only</b></div>
                 <div class="footer">

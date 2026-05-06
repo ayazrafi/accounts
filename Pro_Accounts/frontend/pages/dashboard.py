@@ -110,6 +110,7 @@ class DashboardPage(QWidget):
             ("frontend/assets/icons/bar-chart.svg", "Trial Balance", lambda: self._nav_to(4)),
             ("frontend/assets/icons/pie-chart.svg", "Profit & Loss",  lambda: self._nav_to(5)),
             ("frontend/assets/icons/edit-file.svg", "Ledger Report",  lambda: self._nav_to(6)),
+            ("frontend/assets/icons/settings.svg", "Settings",      lambda: self._nav_to(9)),
         ]
         for icon, label, fn in quick_actions:
             btn = _QuickLinkBtn(icon, label, fn)

@@ -1,4 +1,4 @@
-from mongoengine import Document, StringField, FloatField, DateTimeField, ObjectIdField
+from mongoengine import Document, StringField, FloatField, DateTimeField, ObjectIdField, DictField
 from bson import ObjectId
 from datetime import datetime
 
@@ -18,6 +18,7 @@ class Voucher(Document):
     outstanding_amount = FloatField(default=0.0) # For Sales/Purchase vouchers
     is_fully_paid = StringField(default="No")   # "Yes" | "No"
     created_at   = DateTimeField(default=datetime.utcnow)
+    metadata     = DictField(default=dict)
 
     meta = {'collection': 'vouchers'}
 
@@ -63,10 +64,12 @@ def _next_voucher_no(voucher_type: str, company_id: str) -> str:
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
                    company_id: str = None, reference_type: str = "",
-                   grand_total: float = None) -> str:
+                   grand_total: float = None, invoice_items: list = None,
+                   metadata: dict = None) -> str:
     """
     entries: [{"ledger_id": str, "ledger_name": str, "dr_cr": "Dr"|"Cr", "amount": float}]
     grand_total: if provided, stored as outstanding_amount for Sales/Purchase vouchers.
+    invoice_items: list of stock item details for Sales/Purchase.
     """
     dr_total = sum(e["amount"] for e in entries if e["dr_cr"] == "Dr")
     cr_total = sum(e["amount"] for e in entries if e["dr_cr"] == "Cr")
@@ -89,7 +92,8 @@ def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
         narration=narration,
         company_id=cid,
         reference_type=reference_type,
-        outstanding_amount=_grand if voucher_type in ["Sales", "Purchase"] else 0.0
+        outstanding_amount=_grand if voucher_type in ["Sales", "Purchase", "Credit Note", "Debit Note"] else 0.0,
+        metadata=metadata or {}
     )
     v.save()
     vid = str(v.id)
@@ -107,6 +111,26 @@ def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
             narration=narration,
             company_id=cid,
         ).save()
+
+    # Save stock transactions if any
+    if invoice_items and voucher_type in ["Sales", "Purchase", "Credit Note", "Debit Note"]:
+        from backend.models.inventory import add_stock_transaction
+        # Sales Return (Credit Note) = IN, Purchase Return (Debit Note) = OUT
+        txn_type = "IN" if voucher_type in ["Purchase", "Credit Note"] else "OUT"
+        for it in invoice_items:
+            add_stock_transaction(
+                item_id=it["item_id"],
+                item_name=it["item_name"],
+                txn_type=txn_type,
+                qty=it["qty"],
+                rate=it["rate"],
+                value=it["amount"],
+                voucher_id=vid,
+                date=date,
+                company_id=company_id,
+                discount=it.get("discount", 0.0),
+                scheme=it.get("scheme", 0.0)
+            )
 
     return vid
 
@@ -140,6 +164,10 @@ def get_voucher(voucher_id: str) -> dict | None:
         ]
     }
 
+    # Identify Party (Sales: Dr, Purchase: Cr, Receipt: Cr, Payment: Dr, Credit Note: Cr, Debit Note: Dr)
+    party_side = "Dr" if v.voucher_type in ["Sales", "Payment", "Debit Note"] else "Cr"
+    party_item = next((i for i in items if i.dr_cr == party_side), None)
+
     return {
         "_id":          str(v.id),
         "voucher_no":   v.voucher_no,
@@ -147,6 +175,8 @@ def get_voucher(voucher_id: str) -> dict | None:
         "date":         v.date.strftime("%Y-%m-%d"),
         "narration":    v.narration,
         "company_id":   str(v.company_id) if v.company_id else "",
+        "party_name":   party_item.ledger_name if party_item else "N/A",
+        "party_ledger_id": str(party_item.ledger_id) if party_item and party_item.ledger_id else None,
         "items": [
             {
                 "_id":         str(i.id),
@@ -160,7 +190,8 @@ def get_voucher(voucher_id: str) -> dict | None:
             }
             for i in items
         ],
-        "linking": linking
+        "linking": linking,
+        "metadata": v.metadata or {}
     }
 
 
@@ -203,7 +234,7 @@ def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str 
         Falls back to max(Dr, Cr) if outstanding_amount is 0.
         """
         vid_str = str(v.id)
-        if v.voucher_type in ("Sales", "Purchase"):
+        if v.voucher_type in ("Sales", "Purchase", "Credit Note", "Debit Note"):
             # Use the persisted outstanding_amount (= grand at creation / update time)
             # Fall back to max(Dr, Cr) in case the record was created before this fix.
             stored = v.outstanding_amount or 0.0
@@ -213,6 +244,19 @@ def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str 
         # For journal-type vouchers use Dr total (= Cr total = balanced total)
         return dr_totals.get(vid_str, 0.0)
 
+    # Map party names and IDs for each voucher
+    party_names = {}
+    for item in items:
+        vid_str = str(item.voucher_id)
+        if vid_str in party_names: continue
+        
+        # Determine party side based on voucher type
+        v_type = next((v.voucher_type for v in vouchers if str(v.id) == vid_str), None)
+        side = "Dr" if v_type in ["Sales", "Payment", "Debit Note"] else "Cr"
+        
+        if item.dr_cr == side:
+            party_names[vid_str] = item.ledger_name
+
     return [
         {
             "_id":          str(v.id),
@@ -221,6 +265,7 @@ def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str 
             "date":         v.date.strftime("%Y-%m-%d"),
             "narration":    v.narration,
             "amount":       _grand_total(v),
+            "party_name":   party_names.get(str(v.id), "N/A"),
             "company_id":   str(v.company_id) if v.company_id else "",
         }
         for v in vouchers
@@ -234,7 +279,8 @@ def delete_voucher(voucher_id: str):
 
 
 def update_voucher(voucher_id: str, date: str, narration: str, entries: list,
-                   grand_total: float = None) -> None:
+                   grand_total: float = None, invoice_items: list = None,
+                   metadata: dict = None) -> None:
     """Replace voucher metadata and all its ledger entries."""
     v = Voucher.objects(id=voucher_id).first()
     if not v:
@@ -248,16 +294,42 @@ def update_voucher(voucher_id: str, date: str, narration: str, entries: list,
     date_obj = datetime.strptime(date, "%Y-%m-%d")
     v.date      = date_obj
     v.narration = narration
-    if v.voucher_type in ("Sales", "Purchase"):
+    if v.voucher_type in ("Sales", "Purchase", "Credit Note", "Debit Note"):
         # Use explicit grand_total if provided; otherwise max(Dr, Cr)
         _grand = grand_total if grand_total is not None else max(dr_total, cr_total)
         v.outstanding_amount = _grand
+    
+    if metadata:
+        v.metadata.update(metadata)
     v.save()
     
     # IMPORTANT: Unlink old references before re-linking if this was an update with linking
     # Note: If called from routes, the route should handle re-linking.
     # We unlink here to be safe.
     unlink_all_references(v.id)
+
+    # Clear old stock transactions
+    from backend.models.inventory import StockTransaction
+    StockTransaction.objects(voucher_id=v.id).delete()
+
+    # Save new stock transactions
+    if invoice_items and v.voucher_type in ["Sales", "Purchase", "Credit Note", "Debit Note"]:
+        from backend.models.inventory import add_stock_transaction
+        txn_type = "IN" if v.voucher_type in ["Purchase", "Credit Note"] else "OUT"
+        for it in invoice_items:
+            add_stock_transaction(
+                item_id=it["item_id"],
+                item_name=it["item_name"],
+                txn_type=txn_type,
+                qty=it["qty"],
+                rate=it["rate"],
+                value=it["amount"],
+                voucher_id=str(v.id),
+                date=date,
+                company_id=str(v.company_id),
+                discount=it.get("discount", 0.0),
+                scheme=it.get("scheme", 0.0)
+            )
 
     # Replace all items
     VoucherItem.objects(voucher_id=v.id).delete()

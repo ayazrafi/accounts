@@ -100,10 +100,14 @@ class HeaderBar(QFrame):
         self._page_title.setText(title)
         self._breadcrumb.setText(breadcrumb)
 
-    def set_company(self, name: str, fy_from: str = "", fy_to: str = ""):
+    def set_company(self, name: str, fy_from: str = "", fy_to: str = "", p_from: str = "", p_to: str = ""):
         if name:
-            fy_str = f"  |  FY: {fy_from[:7]} → {fy_to[:7]}" if fy_from and fy_to else ""
-            self._company_badge.setText(f" {name}{fy_str}")
+            text = f" {name}"
+            if fy_from and fy_to:
+                text += f"  |  FY: {fy_from[:7]} → {fy_to[:7]}"
+            if p_from and p_to and (p_from != fy_from or p_to != fy_to):
+                text += f"  |  Period: {p_from[:7]} → {p_to[:7]}"
+            self._company_badge.setText(text)
             self._company_badge.setVisible(True)
         else:
             self._company_badge.setVisible(False)

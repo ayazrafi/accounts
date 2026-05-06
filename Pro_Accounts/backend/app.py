@@ -5,6 +5,7 @@ from backend.routes.ledger_routes import ledger_bp
 from backend.routes.voucher_routes import voucher_bp
 from backend.routes.report_routes import reports_bp
 from backend.routes.inventory_routes import inventory_bp
+from backend.routes.settings_routes import settings_bp
 from backend.models.group import seed_default_groups
 from backend.models.inventory import seed_defaults as seed_inventory
 import os
@@ -49,6 +50,7 @@ def create_app():
     app.register_blueprint(voucher_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(inventory_bp)
+    app.register_blueprint(settings_bp)
 
     @app.get("/api/health")
     def health():
