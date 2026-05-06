@@ -333,7 +333,7 @@ class CreditNoteDialog(QDialog):
         row_lay.addWidget(amt)
         row_lay.addWidget(del_btn)
         
-        row_data = {"widget": row_w, "cb": cb, "amt": amt}
+        row_data = {"widget": row_w, "cb": cb, "amt": amt, "is_auto_tax": False}
         del_btn.clicked.connect(lambda: self._remove_tax_row(row_data))
         
         self.tax_v_lay.insertWidget(len(self._tax_rows), row_w)
@@ -423,9 +423,11 @@ class CreditNoteDialog(QDialog):
         self._recalculate()
 
     def _recalculate(self):
-        if not self._original_invoice: return
+        # if not self._original_invoice: return # Removed to allow manual item calculation
         return_type = self.reason_cb.currentData()
         if not return_type: return
+        
+        gst_type = self._original_invoice.get("gst_type_calc", "CGST+SGST") if self._original_invoice else "CGST+SGST"
         
         total_taxable = 0
         tax_map = {} # Key: (type, rate), Value: amount
@@ -441,7 +443,7 @@ class CreditNoteDialog(QDialog):
                 self.table.item(i, 4).setText(f"{taxable:.2f}")
                 self.table.item(i, 6).setText(f"{(taxable + gst_amt):.2f}")
                 total_taxable += taxable
-                self._distribute_gst(tax_map, gst_amt)
+                self._distribute_gst(tax_map, gst_amt, gst_p, gst_type)
 
         elif "Value Adjustment" in return_type:
             X = self.reduction_amt.value()
@@ -481,7 +483,7 @@ class CreditNoteDialog(QDialog):
                     self.table.item(i, 4).setText(f"{taxable:.2f}")
                     self.table.item(i, 6).setText(f"{(taxable + gst_amt):.2f}")
                     total_taxable += taxable
-                    self._distribute_gst(tax_map, gst_amt, gst_p)
+                    self._distribute_gst(tax_map, gst_amt, gst_p, gst_type)
 
         elif return_type == "Invoice Items Return":
             for i in range(self.table.rowCount()):
@@ -501,49 +503,62 @@ class CreditNoteDialog(QDialog):
                     self.table.item(i, 4).setText(f"{taxable:.2f}")
                     self.table.item(i, 6).setText(f"{(taxable + gst_amt):.2f}")
                     total_taxable += taxable
-                    self._distribute_gst(tax_map, gst_amt, gst_p)
+                    self._distribute_gst(tax_map, gst_amt, gst_p, gst_type)
                 except (ValueError, AttributeError): pass
 
         self.table.blockSignals(False)
         
-        # Auto-update or auto-add tax rows based on tax_map
-        # Reset existing tax row amounts first (only those we manage)
-        for r in self._tax_rows: r["amt"].setValue(0)
-        
-        def _get_or_add_tax_row(type_part, rate):
-            rate_val = float(rate)
+        # ── Sync Tax Rows with tax_map ────────────────────────────────────────
+        # Identify which tax ledgers we need based on tax_map
+        needed_ledgers = [] # list of (ledger_dict, amount)
+        for (ttype, trate), tamount in tax_map.items():
+            if tamount <= 0: continue
+            
+            rate_val = float(trate)
             rate_str = str(int(rate_val)) if rate_val == int(rate_val) else str(rate_val)
             
-            # 1. Search existing rows for a match (by type and rate in name)
-            for row in self._tax_rows:
-                l_name = row["cb"].currentText().upper()
-                if type_part in l_name and rate_str in l_name:
-                    return row
-            
-            # 2. Search master ledgers for a matching name in D&T group
+            # Find best matching ledger in master
+            match = None
+            # Preference 1: Exact match with rate in name and "Sales" or "Output"
             for l in self._ledgers:
-                l_name = l["name"].upper()
-                if type_part in l_name and rate_str in l_name and self._is_dt_group.get(l.get("group")):
-                    return self._add_tax_row(ledger_id=l["_id"])
+                if not self._is_dt_group.get(l.get("group")): continue
+                ln = l["name"].upper()
+                if ttype in ln and rate_str in ln and ("SALES" in ln or "OUTPUT" in ln):
+                    match = l; break
+            # Preference 2: Any D&T match with type and rate
+            if not match:
+                for l in self._ledgers:
+                    if not self._is_dt_group.get(l.get("group")): continue
+                    ln = l["name"].upper()
+                    if ttype in ln and rate_str in ln:
+                        match = l; break
             
-            # 3. Fallback to generic if no rate-specific found (but don't overwrite another rate's ledger)
-            for l in self._ledgers:
-                l_name = l["name"].upper()
-                if type_part in l_name and self._is_dt_group.get(l.get("group")):
-                    if not any(c.isdigit() for c in l_name): # Basic check for generic
-                        return self._add_tax_row(ledger_id=l["_id"])
-            return None
+            if match:
+                needed_ledgers.append((match, round(tamount, 2)))
 
-        for (t_type, t_rate), amount in tax_map.items():
-            if amount <= 0: continue
-            row = _get_or_add_tax_row(t_type, t_rate)
-            if row:
-                row["amt"].setValue(row["amt"].value() + amount)
+        # Sync existing rows (both auto and manual)
+        for row in list(self._tax_rows):
+            l_id = row["cb"].currentData()
+            match_data = next((x for x in needed_ledgers if x[0]["_id"] == l_id), None)
+            
+            if match_data:
+                nl, namt = match_data
+                row["amt"].setValue(namt)
+                row["is_auto_tax"] = True # We take control of it
+                needed_ledgers.remove(match_data)
+            elif row.get("is_auto_tax"):
+                # It was auto-added but no longer needed
+                self._remove_tax_row(row)
+
+        # Add new rows for remaining needed ledgers
+        for nl, namt in needed_ledgers:
+            new_row = self._add_tax_row(ledger_id=nl["_id"])
+            new_row["is_auto_tax"] = True
+            new_row["amt"].setValue(namt)
             
         self._update_summary_labels()
 
-    def _distribute_gst(self, tax_map, total_gst, gst_rate):
-        gst_type = self._original_invoice.get("gst_type_calc", "CGST+SGST")
+    def _distribute_gst(self, tax_map, total_gst, gst_rate, gst_type):
         if gst_type == "IGST":
             key = ("IGST", gst_rate)
             tax_map[key] = tax_map.get(key, 0) + total_gst
