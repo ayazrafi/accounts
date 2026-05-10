@@ -6,7 +6,7 @@ from backend.models.inventory import (
     create_stock_category, update_stock_category, delete_stock_category,
     get_stock_items, get_stock_item,
     create_stock_item, update_stock_item, delete_stock_item,
-    get_stock_balance
+    get_stock_balance, seed_defaults
 )
 
 inventory_bp = Blueprint("inventory", __name__, url_prefix="/api/inventory")

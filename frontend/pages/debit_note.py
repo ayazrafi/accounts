@@ -12,7 +12,7 @@ import frontend.session as session
 import re
 
 REASONS = [
-    ("Sales Return", "Invoice Items Return"),
+    ("Purchase Return", "Invoice Items Return"),
     ("Partial Return", "Invoice Items Return"),
     ("Short Supply", "Invoice Value Adjustment (Inclusive)"),
     ("Overbilling Correction", "Invoice Value Adjustment (Inclusive)"),
@@ -21,13 +21,14 @@ REASONS = [
     ("Pre-agreed Discount", "Invoice Value Adjustment (Exclusive)"),
     ("Post-supply Discount", "Invoice Value Adjustment (Exclusive)"),
     ("Specific Item Discount", "Invoice Items Return"),
-    ("Cancelled Sale", "Full Invoice Return"),
+    ("Damaged Goods", "Invoice Items Return"),
+    ("Cancelled Purchase", "Full Invoice Return"),
 ]
 
-class CreditNoteDialog(QDialog):
+class DebitNoteDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Credit Note Entry")
+        self.setWindowTitle("Debit Note Entry")
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         
@@ -52,7 +53,7 @@ class CreditNoteDialog(QDialog):
         self._reset_ui()
         self._existing = voucher
         if voucher:
-            self.setWindowTitle(f"Edit Credit Note: {voucher.get('voucher_no')}")
+            self.setWindowTitle(f"Edit Debit Note: {voucher.get('voucher_no')}")
             # Use singleShot to allow UI/Model to settle before populating
             QTimer.singleShot(100, lambda: self._populate_existing(voucher))
         else:
@@ -60,6 +61,7 @@ class CreditNoteDialog(QDialog):
             self.narration.clear()
             self.invoice_cb.setCurrentIndex(0)
             self.reason_cb.setCurrentIndex(0)
+            self.supplier_cn_no.clear()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -68,18 +70,17 @@ class CreditNoteDialog(QDialog):
 
         # Header
         header = QFrame()
-        header.setStyleSheet("background: #1e3a8a; border-radius: 8px; padding: 12px;")
+        header.setStyleSheet("background: #991b1b; border-radius: 8px; padding: 12px;") # Reddish for Debit Note / Purchase
         header_layout = QHBoxLayout(header)
         
-        
-        title = QLabel("CREDIT NOTE (GST COMPLIANT)")
+        title = QLabel("DEBIT NOTE / PURCHASE RETURN")
         title.setStyleSheet("color: white; font-size: 20px; font-weight: bold; margin-left: 10px;")
         header_layout.addWidget(title)
         header_layout.addStretch()
         
         self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setFixedWidth(120)
-        header_layout.addWidget(QLabel("<span style='color: #bfdbfe'>Date:</span>"))
+        header_layout.addWidget(QLabel("<span style='color: #fecaca'>Date:</span>"))
         header_layout.addWidget(self.date_edit)
         layout.addWidget(header)
 
@@ -98,7 +99,7 @@ class CreditNoteDialog(QDialog):
         sel_lay.setContentsMargins(15, 15, 15, 15)
         sel_lay.setSpacing(12)
         
-        sel_lay.addWidget(QLabel("<b>Original Sales Invoice (Optional):</b>"), 0, 0)
+        sel_lay.addWidget(QLabel("<b>Original Purchase Invoice:</b>"), 0, 0)
         self.invoice_cb = SearchableComboBox()
         self.invoice_cb.addItem("-- Select Invoice --", None)
         self.invoice_cb.currentIndexChanged.connect(self._on_invoice_selected)
@@ -112,20 +113,25 @@ class CreditNoteDialog(QDialog):
         self.reason_cb.currentIndexChanged.connect(self._on_reason_changed)
         sel_lay.addWidget(self.reason_cb, 0, 3)
 
-        sel_lay.addWidget(QLabel("<b>Party A/c Name:</b>"), 1, 0)
+        sel_lay.addWidget(QLabel("<b>Supplier Name:</b>"), 1, 0)
         self.party_cb = SearchableComboBox()
-        self.party_cb.addItem("-- Select Party --", None)
+        self.party_cb.addItem("-- Select Supplier --", None)
         self.party_cb.currentIndexChanged.connect(self._on_party_changed)
         sel_lay.addWidget(self.party_cb, 1, 1)
 
-        sel_lay.addWidget(QLabel("<b>Sales Return Ledger:</b>"), 1, 2)
+        sel_lay.addWidget(QLabel("<b>Purchase Return Ledger:</b>"), 1, 2)
         self.ledger_cb = SearchableComboBox()
         self.ledger_cb.addItem("-- Select Ledger --", None)
         sel_lay.addWidget(self.ledger_cb, 1, 3)
 
+        sel_lay.addWidget(QLabel("<b>Supplier Credit Note No:</b>"), 2, 0)
+        self.supplier_cn_no = QLineEdit()
+        self.supplier_cn_no.setPlaceholderText("Ref. Supplier CN Number")
+        sel_lay.addWidget(self.supplier_cn_no, 2, 1)
+
         self.binding_info = QLabel("<i>Select an invoice to auto-bind details</i>")
-        self.binding_info.setStyleSheet("color: #1e40af; font-weight: 500; background: #eff6ff; padding: 8px; border-radius: 4px;")
-        sel_lay.addWidget(self.binding_info, 2, 0, 1, 4)
+        self.binding_info.setStyleSheet("color: #991b1b; font-weight: 500; background: #fef2f2; padding: 8px; border-radius: 4px;")
+        sel_lay.addWidget(self.binding_info, 3, 0, 1, 4)
         content_lay.addWidget(sel_group)
 
         # 2. Input Area (Value Adjustment)
@@ -151,7 +157,7 @@ class CreditNoteDialog(QDialog):
         
         btn_lay = QHBoxLayout()
         self.add_item_btn = QPushButton("+ Add Manual &Item")
-        self.add_item_btn.setStyleSheet("QPushButton { background: #1e40af; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background: #1e3a8a; }")
+        self.add_item_btn.setStyleSheet("QPushButton { background: #991b1b; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background: #7f1d1d; }")
         self.add_item_btn.clicked.connect(self._add_manual_item)
         
         btn_lay.addStretch()
@@ -189,7 +195,7 @@ class CreditNoteDialog(QDialog):
         
         # 5. Summary & Narration
         summary_panel = QFrame()
-        summary_panel.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px;")
+        summary_panel.setStyleSheet("background: #fdf2f2; border: 1px solid #fee2e2; border-radius: 10px; padding: 20px;")
         sum_lay = QHBoxLayout(summary_panel)
         
         v_sum = QVBoxLayout()
@@ -198,7 +204,7 @@ class CreditNoteDialog(QDialog):
         self.gst_total_lbl = QLabel("Total GST: ₹ 0.00")
         self.gst_total_lbl.setStyleSheet("font-size: 14px; color: #475569;")
         self.grand_lbl = QLabel("GRAND TOTAL: ₹ 0.00")
-        self.grand_lbl.setStyleSheet("font-size: 24px; font-weight: bold; color: #1e3a8a;")
+        self.grand_lbl.setStyleSheet("font-size: 24px; font-weight: bold; color: #991b1b;")
         v_sum.addWidget(self.taxable_lbl)
         v_sum.addWidget(self.gst_total_lbl)
         v_sum.addWidget(self.grand_lbl)
@@ -212,7 +218,7 @@ class CreditNoteDialog(QDialog):
         self.narration.setPlaceholderText("Enter transaction details...")
         self.narration.setMinimumWidth(450)
         self.narration.setFixedHeight(40)
-        self.narration.setStyleSheet("border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px;")
+        self.narration.setStyleSheet("border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; background: white;")
         nar_lay.addWidget(self.narration)
         sum_lay.addLayout(nar_lay)
         content_lay.addWidget(summary_panel)
@@ -232,9 +238,9 @@ class CreditNoteDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         actions_lay.addWidget(self.cancel_btn)
         
-        self.save_btn = QPushButton("Save Credit Note")
+        self.save_btn = QPushButton("Save Debit Note")
         self.save_btn.setFixedSize(180, 40)
-        self.save_btn.setStyleSheet("QPushButton { background: #1e3a8a; color: white; border-radius: 6px; font-weight: bold; font-size: 14px; } QPushButton:hover { background: #1e40af; }")
+        self.save_btn.setStyleSheet("QPushButton { background: #991b1b; color: white; border-radius: 6px; font-weight: bold; font-size: 14px; } QPushButton:hover { background: #7f1d1d; }")
         self.save_btn.clicked.connect(self._on_accept)
         actions_lay.addWidget(self.save_btn)
         
@@ -252,25 +258,25 @@ class CreditNoteDialog(QDialog):
             self._is_dt_group = {str(g["_id"]): (g["name"] == "Duties & Taxes" or (g.get("parent") or "") == "Duties & Taxes" or str(g.get("parent", "")) == self._dt_group_id) for g in _groups}
             
             self.party_cb.clear()
-            self.party_cb.addItem("-- Select Party --", None)
+            self.party_cb.addItem("-- Select Supplier --", None)
             for l in self._ledgers:
                 g_id = str(l.get("group", ""))
                 g_name = self._group_map.get(g_id, "")
-                if g_name == "Sundry Debtors":
+                if g_name == "Sundry Creditors":
                     self.party_cb.addItem(l["name"], l["_id"])
 
             self.ledger_cb.clear()
             self.ledger_cb.addItem("-- Select Ledger --", None)
-            default_sales_return = None
+            default_purchase_return = None
             for l in self._ledgers:
                 g_id = str(l.get("group", ""))
                 g_name = self._group_map.get(g_id, "")
-                if g_name == "Sales Accounts":
+                if g_name == "Purchase Accounts":
                     self.ledger_cb.addItem(l["name"], l["_id"])
-                    if not default_sales_return: default_sales_return = l["_id"]
+                    if not default_purchase_return: default_purchase_return = l["_id"]
             
-            if default_sales_return:
-                self.ledger_cb.setCurrentData(default_sales_return)
+            if default_purchase_return:
+                self.ledger_cb.setCurrentData(default_purchase_return)
 
             # "Create New Ledger" feature for party and ledger combos
             def _make_ledger_creator(target_combo):
@@ -296,23 +302,13 @@ class CreditNoteDialog(QDialog):
             wire_create_new(self.party_cb,  _make_ledger_creator(self.party_cb))
             wire_create_new(self.ledger_cb, _make_ledger_creator(self.ledger_cb))
             
-            # Prevent multiple signal connections if _load_data is called again
-            if not hasattr(self, "_ledgers_wired"):
-                self._ledgers_wired = True
-            else:
-                # If already wired, wire_create_new would have added a duplicate connection.
-                # Since we cleared the combo, we just need to re-add the item if we aren't using wire_create_new.
-                # But wire_create_new is the standard way. 
-                # For simplicity in this app, _load_data is usually only called once.
-                pass
-
             try:
                 comp = api.get_company(session.company_id)
                 self._company_state = comp.get("state", "").strip().lower()
             except:
                 self._company_state = ""
 
-            invoices = api.list_vouchers(type="Sales", company_id=session.company_id)
+            invoices = api.list_vouchers(type="Purchase", company_id=session.company_id)
             for inv in invoices:
                 label = f"[{inv['date']}] {inv.get('voucher_no', 'N/A')} - {inv.get('party_name', 'N/A')} (₹{format_indian_number(inv.get('amount', 0))})"
                 self.invoice_cb.addItem(label, inv)
@@ -336,28 +332,21 @@ class CreditNoteDialog(QDialog):
 
     def _bind_invoice_data(self):
         inv = self._original_invoice
-        # Vouchers use 'entries' in the backend/API
         v_entries = inv.get("entries") or inv.get("items") or []
         
-        party_entry = next((e for e in v_entries if e.get("dr_cr") == "Dr"), {})
-        # Sales entry in a Sales Invoice is Cr
-        sales_entry = next((e for e in v_entries if e.get("dr_cr") == "Cr" and "GST" not in e.get("ledger_name", "").upper()), {})
+        # Purchase Invoice: Party is Cr, Purchase is Dr
+        party_entry = next((e for e in v_entries if e.get("dr_cr") == "Cr"), {})
+        purchase_entry = next((e for e in v_entries if e.get("dr_cr") == "Dr" and "GST" not in e.get("ledger_name", "").upper()), {})
         
         party_name = inv.get("party_name") or party_entry.get("ledger_name", "N/A")
         party_id = inv.get("party_ledger_id") or party_entry.get("ledger_id")
         
-        sales_ledger = inv.get("ledger_name") or sales_entry.get("ledger_name", "Sales")
-        sales_id = inv.get("sales_ledger_id") or sales_entry.get("ledger_id")
-        
-        # If the invoice uses a generic "Sales" ledger, we might want to try 
-        # finding a matching "Sales Return" ledger instead, but usually 
-        # we want to follow the user's setup. 
-        # For now, let's just set what we found.
+        purchase_id = inv.get("purchase_ledger_id") or purchase_entry.get("ledger_id")
         
         if party_id:
             self.party_cb.setCurrentData(party_id)
-        if sales_id:
-            self.ledger_cb.setCurrentData(sales_id)
+        if purchase_id:
+            self.ledger_cb.setCurrentData(purchase_id)
         
         # Display binding info
         self.binding_info.setText(f"<b>Linked to:</b> {inv.get('voucher_no')} | {party_name}")
@@ -439,7 +428,7 @@ class CreditNoteDialog(QDialog):
     def _rewire_nav(self):
         widgets = [
             self.date_edit, self.invoice_cb, self.reason_cb,
-            self.party_cb, self.ledger_cb
+            self.party_cb, self.ledger_cb, self.supplier_cn_no
         ]
         for row in self._tax_rows:
             widgets.append(row["cb"])
@@ -535,13 +524,11 @@ class CreditNoteDialog(QDialog):
         # 2. Loose match for tax ledgers
         lname_upper = name.strip().upper()
         if any(x in lname_upper for x in ["CGST", "SGST", "IGST"]):
-            # Try to find by components (e.g., "CGST" and "9")
             target_type = None
             for t in ["CGST", "SGST", "IGST"]:
                 if t in lname_upper:
                     target_type = t; break
             
-            # Extract rate from name (e.g., "9")
             rate_match = re.search(r"(\d+\.?\d*)", lname_upper)
             target_rate = rate_match.group(1) if rate_match else None
             
@@ -550,8 +537,8 @@ class CreditNoteDialog(QDialog):
                     if not self._is_dt_group.get(l.get("group")): continue
                     ln = l["name"].upper()
                     if target_type in ln and target_rate in ln:
-                        # Ensure it's a Sales/Output ledger for Credit Note
-                        if "PURCHASE" in ln or "INPUT" in ln: continue
+                        # For Debit Note (Purchase Return), we reverse Input tax
+                        if "SALES" in ln or "OUTPUT" in ln: continue
                         return l
         return None
 
@@ -571,10 +558,8 @@ class CreditNoteDialog(QDialog):
 
     def _recalculate(self):
         return_type = self.reason_cb.currentData()
-        # Even if no return type, we calculate based on items for tax binding
         effective_return_type = return_type or "Invoice Items Return"
         
-        # Determine GST Type: Original Invoice > Party State Comparison > Default
         if self._original_invoice:
             gst_type = self._original_invoice.get("gst_type_calc", "CGST+SGST")
         elif self._party_state:
@@ -650,7 +635,6 @@ class CreditNoteDialog(QDialog):
                     if orig_item:
                         gst_p = orig_item.get("gst_rate", 0)
                     else:
-                        # For manual items, read GST rate from column 5
                         try:
                             gst_text = self.table.item(i, 5).text().replace("%", "")
                             gst_p = float(gst_text)
@@ -667,41 +651,36 @@ class CreditNoteDialog(QDialog):
 
         self.table.blockSignals(False)
         
-        # ── Sync Tax Rows with tax_map ────────────────────────────────────────
-        # Group needed tax amounts by ledger ID to prevent duplicates
-        needed_grouped = {} # ledger_id -> (ledger_dict, total_amt)
-        prefix = "Sales" # Credit Note is a Sales Return, so we use Sales tax ledgers (Output)
+        # ── Sync Tax Rows ────────────────────────────────────────────────────
+        needed_grouped = {} 
+        prefix = "Purchase" # Debit Note is a Purchase Return
         
         for (ttype, trate), tamount in tax_map.items():
             if tamount <= 0: continue
             
             rate_val = float(trate)
-            # Use same naming convention as Sales Voucher: "Sales CGST@9%"
             lname = f"{prefix} {ttype}@{rate_val:g}%"
             match = self._find_ledger_by_name(lname)
             
-            # Fallback to loose matching if specific name not found
             if not match:
                 rate_str = str(int(rate_val)) if rate_val == int(rate_val) else f"{rate_val:g}"
                 for l in self._ledgers:
                     if not self._is_dt_group.get(str(l.get("group"))): continue
                     ln = l["name"].upper()
-                    # Look for "OUTPUT" or "SALES" and the specific tax type and rate
-                    if ttype in ln and rate_str in ln and any(x in ln for x in ["SALES", "OUTPUT"]):
+                    if ttype in ln and rate_str in ln and any(x in ln for x in ["PURCHASE", "INPUT"]):
                         match = l; break
 
             # Still no match? Auto-create
             if not match and self._dt_group_id:
                 try:
-                    # Credit Note is a Sales Return, so we use Sales tax ledgers (Output/Cr normally, but Debit in CN)
-                    # Actually, the base direction for CN adjustments is Dr (as per our previous turns)
-                    # But the ledger's NATURAL type should be Cr (as it's a Liability/Tax ledger)
+                    # Debit Note is a Purchase Return, so we use Purchase tax ledgers (Input/Dr normally, but Credit in DN)
+                    # But the ledger's NATURAL type should be Dr (as it's an Asset/Tax ledger)
                     resp = api.create_ledger({
                         "name": lname,
                         "group": self._dt_group_id,
                         "tax_rate": rate_val,
                         "opening_balance": 0,
-                        "type": "Cr"
+                        "type": "Dr"
                     })
                     match = {
                         "_id": resp.get("id", ""),
@@ -712,7 +691,7 @@ class CreditNoteDialog(QDialog):
                     self._ledgers.append(match)
                     self._is_dt_group[str(match["_id"])] = True
                 except Exception as e:
-                    print(f"Error auto-creating CN tax ledger {lname}: {e}")
+                    print(f"Error auto-creating DN tax ledger {lname}: {e}")
             
             if match:
                 lid = match["_id"]
@@ -720,7 +699,6 @@ class CreditNoteDialog(QDialog):
 
         final_needed = list(needed_grouped.values())
 
-        # Sync existing rows (both auto and manual)
         for row in list(self._tax_rows):
             l_id = row["cb"].currentData()
             match_data = next((x for x in final_needed if x[0]["_id"] == l_id), None)
@@ -731,10 +709,8 @@ class CreditNoteDialog(QDialog):
                 row["is_auto_tax"] = True 
                 final_needed.remove(match_data)
             elif row.get("is_auto_tax"):
-                # It was auto-added but no longer needed
                 self._remove_tax_row(row)
 
-        # Add new rows for remaining needed ledgers
         for nl, namt in final_needed:
             new_row = self._add_tax_row(ledger_id=nl["_id"])
             new_row["is_auto_tax"] = True
@@ -771,14 +747,13 @@ class CreditNoteDialog(QDialog):
         self.party_cb.setCurrentIndex(0)
         self.ledger_cb.setCurrentIndex(0)
         self.table.setRowCount(0)
+        self.supplier_cn_no.clear()
         for r in list(self._tax_rows): self._remove_tax_row(r)
         self._update_summary_labels()
 
     def _on_accept(self):
-        # Original invoice is now optional
         inv = self._original_invoice or {}
-        # Reason is now optional
-        reason = self.reason_cb.currentText() if self.reason_cb.currentIndex() > 0 else "Credit Note"
+        reason = self.reason_cb.currentText() if self.reason_cb.currentIndex() > 0 else "Debit Note"
         total_taxable = 0
         for i in range(self.table.rowCount()):
             try: total_taxable += float(self.table.item(i, 4).text() or 0)
@@ -791,17 +766,21 @@ class CreditNoteDialog(QDialog):
             try:
                 qty = float(self.table.item(i, 2).text() or 0)
                 if qty <= 0 and self.reduction_amt.value() <= 0: continue
+                
+                # Validation: Return qty <= Orig qty
+                orig_qty = float(self.table.item(i, 1).text() or 0)
+                if self._original_invoice and qty > orig_qty:
+                    QMessageBox.warning(self, "Validation", f"Return quantity for {self.table.item(i, 0).text()} exceeds original purchase quantity."); return
+
                 rate = float(self.table.item(i, 3).text() or 0)
                 taxable = float(self.table.item(i, 4).text() or 0)
                 item_name = self.table.item(i, 0).text()
-                # Try to get metadata from UserRole data set in _add_row_from_data / _add_manual_item
                 item_id = self.table.item(i, 0).data(Qt.ItemDataRole.UserRole)
                 
                 gst_text = self.table.item(i, 5).text().replace("%", "")
                 gst_rate = float(gst_text) if gst_text else 0
                 
                 if not item_id:
-                    # Fallback to orig_item if data not in UserRole
                     orig = next((it for it in self._items_data if it["item_name"] == item_name), None)
                     if orig:
                         item_id = orig["item_id"]
@@ -819,184 +798,167 @@ class CreditNoteDialog(QDialog):
         if not invoice_items and grand_total <= 0:
             QMessageBox.warning(self, "Validation", "No items or reduction value calculated."); return
 
+        # Validation: Debit Note amount <= Original invoice amount (or outstanding if preferred)
+        if self._original_invoice:
+            total_inv = self._original_invoice.get("amount", 0)
+            # Use Original Total as the limit to allow returns on paid invoices
+            limit = total_inv
+            
+            if self._existing: # If editing, we compare against original total
+                pass 
+                
+            if grand_total > limit + 0.01:
+                QMessageBox.warning(self, "Validation", f"Debit Note amount (₹{grand_total}) exceeds original invoice total (₹{limit})."); return
+
         party_id = self.party_cb.currentData()
         party_name = self.party_cb.currentText()
         if not party_id:
-            QMessageBox.warning(self, "Validation", "Select a Party ledger"); return
+            QMessageBox.warning(self, "Validation", "Select a Supplier ledger"); return
             
-        sales_id = self.ledger_cb.currentData()
-        sales_name = self.ledger_cb.currentText()
-        if not sales_id:
-            QMessageBox.warning(self, "Validation", "Select a Sales Return ledger"); return
+        purchase_id = self.ledger_cb.currentData()
+        purchase_name = self.ledger_cb.currentText()
+        if not purchase_id:
+            QMessageBox.warning(self, "Validation", "Select a Purchase Return ledger"); return
+        
+        # Accounting logic for Debit Note (Purchase Return):
+        # Supplier A/c: Dr
+        # Purchase Return: Cr
+        # Tax Ledgers: Cr
         
         entries = [
-            {"ledger_id": party_id, "ledger_name": party_name, "dr_cr": "Cr", "amount": grand_total},
-            {"ledger_id": sales_id, "ledger_name": sales_name, "dr_cr": "Dr", "amount": total_taxable}
+            {"ledger_id": party_id, "ledger_name": party_name, "dr_cr": "Dr", "amount": grand_total},
+            {"ledger_id": purchase_id, "ledger_name": purchase_name, "dr_cr": "Cr", "amount": total_taxable}
         ]
+        
         for r in self._tax_rows:
             amt = r["amt"].value()
-            if abs(amt) > 0.01:
-                dr_cr = "Dr"
-                if amt < 0:
-                    dr_cr = "Cr"
-                    amt = abs(amt)
-                entries.append({"ledger_id": r["cb"].currentData(), "ledger_name": r["cb"].currentText(), "dr_cr": dr_cr, "amount": amt})
+            if abs(amt) > 0.005:
+                entries.append({
+                    "ledger_id": r["cb"].currentData(),
+                    "ledger_name": r["cb"].currentText(),
+                    "dr_cr": "Dr" if amt < 0 else "Cr",
+                    "amount": abs(amt)
+                })
 
-        reason = self.reason_cb.currentText() if self.reason_cb.currentIndex() > 0 else "Credit Note"
-        nar_prefix = f"{reason}"
-        if inv.get('voucher_no'):
-            nar_prefix += f" against Inv#{inv.get('voucher_no')}"
-            
+        date_str = self.date_edit.date().toString("yyyy-MM-dd")
+        
+        # Meta info
+        metadata = {
+            "original_invoice_id": str(inv.get("_id")) if inv.get("_id") else None,
+            "original_invoice_no": inv.get("voucher_no"),
+            "supplier_cn_no": self.supplier_cn_no.text().strip(),
+            "reason": reason,
+            "reduction_amt": self.reduction_amt.value(),
+            "return_type": self.reason_cb.currentData() or "Invoice Items Return"
+        }
+        
         payload = {
-            "voucher_type": "Credit Note", "date": self.date_edit.date().toString("yyyy-MM-dd"),
-            "narration": f"{nar_prefix} | {self.narration.text()}",
-            "entries": entries, "company_id": session.company_id, "grand_total": grand_total,
-            "invoice_items": invoice_items
+            "voucher_type": "Debit Note",
+            "date": date_str,
+            "narration": self.narration.text().strip() or f"Purchase return against Inv# {inv.get('voucher_no', 'N/A')}",
+            "entries": entries,
+            "invoice_items": invoice_items,
+            "grand_total": grand_total,
+            "metadata": metadata
         }
-        
-        # Add linking/metadata
-        meta = {
-            "reason": reason, 
-            "timestamp": QDate.currentDate().toString(Qt.DateFormat.ISODate),
-            "inclusive_amount": grand_total,
-            "exclusive_amount": total_taxable
-        }
-        
-        if inv.get("_id"):
-            payload["linking"] = {"reference_type": "Against Reference", "references": [{"voucher_id": inv["_id"], "amount": grand_total}]}
-            meta["original_invoice_id"] = str(inv["_id"])
-            
-        payload["metadata"] = meta
 
-        # Confirmation before saving
-        msg = f"Are you sure you want to {'update' if self._existing else 'save'} this Credit Note?"
-        if QMessageBox.question(self, "Confirm Save", msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
-            return
+        if self._original_invoice:
+            payload["reference_type"] = "Against Reference"
+            payload["linking"] = {
+                "reference_type": "Against Reference",
+                "references": [
+                    {"voucher_id": str(inv["_id"]), "amount": grand_total, "reference_type": "Against Reference"}
+                ]
+            }
 
         try:
-            if self._existing: api.update_voucher(self._existing["_id"], payload)
-            else: api.create_voucher(payload)
+            if self._existing:
+                api.update_voucher(self._existing["_id"], payload)
+                QMessageBox.information(self, "Success", "Debit Note updated successfully.")
+            else:
+                api.create_voucher(payload)
+                QMessageBox.information(self, "Success", "Debit Note saved successfully.")
             self.accept()
-        except Exception as e: QMessageBox.critical(self, "Error", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save Debit Note: {str(e)}")
 
-    def _populate_existing(self, existing):
-        try:
-            self.date_edit.setDate(QDate.fromString(existing["date"], "yyyy-MM-dd"))
-            
-            # 1. Meta / Invoice Link
-            meta = existing.get("metadata", {})
-            reason = meta.get("reason", "")
-            orig_inv_id = meta.get("original_invoice_id")
-            
-            # Try to find and select the original invoice
-            if orig_inv_id:
-                for i in range(1, self.invoice_cb.count()):
-                    if str(self.invoice_cb.itemData(i).get("_id")) == str(orig_inv_id):
-                        self.invoice_cb.setCurrentIndex(i)
-                        break
-            
-            # Select Reason
+    def _populate_existing(self, v):
+        self.date_edit.setDate(QDate.fromString(v["date"], "yyyy-MM-dd"))
+        self.narration.setText(v.get("narration", ""))
+        
+        meta = v.get("metadata", {})
+        self.supplier_cn_no.setText(meta.get("supplier_cn_no", ""))
+        
+        reason = meta.get("reason", "")
+        if reason:
             idx = self.reason_cb.findText(reason)
             if idx >= 0: self.reason_cb.setCurrentIndex(idx)
-            
-            # 2. Narration (strip the auto-generated prefix if possible)
-            nar = existing.get("narration", "")
-            if " | " in nar:
-                self.narration.setText(nar.split(" | ", 1)[1])
-            else:
-                self.narration.setText(nar)
+        
+        self.reduction_amt.setValue(meta.get("reduction_amt", 0))
+        
+        orig_id = meta.get("original_invoice_id")
+        if orig_id:
+            # Find in invoice_cb
+            for i in range(self.invoice_cb.count()):
+                data = self.invoice_cb.itemData(i)
+                if data and str(data.get("_id")) == str(orig_id):
+                    self.invoice_cb.setCurrentIndex(i)
+                    break
+        else:
+            # Manually set party and ledger if no original invoice linked
+            self.party_cb.setCurrentData(v.get("party_ledger_id"))
+            # Find purchase/purchase return ledger from entries
+            for e in v.get("entries", []):
+                if e["dr_cr"] == "Cr" and "GST" not in e["ledger_name"].upper():
+                    self.ledger_cb.setCurrentData(e["ledger_id"])
+                    break
 
-            # 3. Entries (Party & Sales Ledger)
-            entries = existing.get("entries", [])
-            print(f"DEBUG: Found {len(entries)} entries in voucher")
-            
-            # Party is credited in a Credit Note (Cr)
-            party_entry = next((e for e in entries if e["dr_cr"] == "Cr"), None)
-            if party_entry:
-                print(f"DEBUG: Party Entry ID: {party_entry['ledger_id']}")
-                self.party_cb.setCurrentData(party_entry["ledger_id"])
-                print(f"DEBUG: party_cb current index after set: {self.party_cb.currentIndex()}")
-                
-            # Sales Return is debited (Dr). 
-            # We specifically look for the Dr entry that is NOT a tax ledger.
-            # We can check if the ledger_id exists in our sales ledger combo.
-            sales_entry = None
-            for e in entries:
-                if e["dr_cr"] == "Dr":
-                    # Check if this ledger is in our sales ledger combo
-                    data_idx = self.ledger_cb.findData(e["ledger_id"])
-                    print(f"DEBUG: checking Dr entry {e['ledger_name']} ({e['ledger_id']}) in sales_cb: idx={data_idx}")
-                    if data_idx >= 0:
-                        sales_entry = e
-                        break
-            
-            if sales_entry:
-                self.ledger_cb.setCurrentData(sales_entry["ledger_id"])
-                print(f"DEBUG: ledger_cb current index after set: {self.ledger_cb.currentIndex()}")
-            else:
-                # Fallback to first Dr if no match found
-                sales_entry = next((e for e in entries if e["dr_cr"] == "Dr"), None)
-                if sales_entry:
-                    self.ledger_cb.setCurrentData(sales_entry["ledger_id"])
-                    print(f"DEBUG: Fallback ledger_cb current index: {self.ledger_cb.currentIndex()}")
-
-            # 4. Items Table
-            items = existing.get("invoice_items")
-            if items is None:
-                try:
-                    items = api.get_voucher_stock_txns(existing["_id"])
-                    existing["invoice_items"] = items
-                except:
-                    items = []
-            self.table.setRowCount(0)
+        # Load items
+        items = v.get("invoice_items", [])
+        if items:
             self.table.blockSignals(True)
+            self.table.setRowCount(0)
             for it in items:
-                self._add_row_from_data(it)
-                row = self.table.rowCount() - 1
-                # Set specific values (qty, rate) as they might differ from original if edited
-                self.table.item(row, 2).setText(str(it.get("qty", 0)))
-                self.table.item(row, 3).setText(str(it.get("rate", 0)))
-                self.table.item(row, 4).setText(str(it.get("amount", 0)))
-            self.table.blockSignals(False)
-            
-            # 4.5 Set Reduction Amount precisely now that items are loaded
-            meta = existing.get("metadata", {})
-            inc_amt = meta.get("inclusive_amount")
-            exc_amt = meta.get("exclusive_amount")
-            return_type = self.reason_cb.currentData() or ""
-            
-            if "Exclusive" in return_type:
-                val = exc_amt if exc_amt is not None else sum(it.get("amount", 0) for it in items)
-                self.reduction_amt.setValue(val)
-            else:
-                val = inc_amt if inc_amt is not None else existing.get("grand_total", 0)
-                self.reduction_amt.setValue(val)
-
-            # 5. Tax Rows
-            # Clear any rows added by _bind_invoice_data during invoice selection
-            for r in list(self._tax_rows):
-                self._remove_tax_row(r)
+                row = self.table.rowCount()
+                self.table.insertRow(row)
                 
-            # Filter entries that are NOT the main party or sales return ledger
-            tax_entries = [e for e in entries if e["ledger_id"] != party_entry.get("ledger_id") and e["ledger_id"] != sales_entry.get("ledger_id")]
-            for te in tax_entries:
-                row_data = self._add_tax_row(te["ledger_id"])
-                val = te["amount"]
-                # For Credit Note, base direction for adjustments/taxes is Dr
-                if te["dr_cr"] == "Cr":
+                # Check if we have original qty in meta or somewhere
+                # For now just use it.qty as return qty
+                it_name = QTableWidgetItem(it["item_name"])
+                it_name.setData(Qt.ItemDataRole.UserRole, it["item_id"])
+                self.table.setItem(row, 0, it_name)
+                
+                self.table.setItem(row, 1, QTableWidgetItem("0")) # Orig Qty unknown unless linked
+                self.table.setItem(row, 2, QTableWidgetItem(str(it["qty"])))
+                self.table.setItem(row, 3, QTableWidgetItem(str(it["rate"])))
+                self.table.setItem(row, 4, QTableWidgetItem(str(it["amount"])))
+                
+                gst_p = it.get("gst_rate", 0)
+                it_gst = QTableWidgetItem(f"{gst_p}%"); it_gst.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.table.setItem(row, 5, it_gst)
+                self.table.setItem(row, 6, QTableWidgetItem(str(round(it["amount"] * (1 + gst_p/100), 2))))
+                
+                del_btn = QPushButton("✕")
+                del_btn.setFixedSize(24, 24)
+                del_btn.setStyleSheet("color: red; font-weight: bold; border: none; background: transparent;")
+                del_btn.clicked.connect(lambda: self._remove_row(row))
+                self.table.setCellWidget(row, 7, del_btn)
+            self.table.blockSignals(False)
+
+        # Load tax rows
+        for r in list(self._tax_rows): self._remove_tax_row(r)
+        
+        # Determine main IDs to skip (party and purchase return)
+        party_id = self.party_cb.currentData()
+        purchase_id = self.ledger_cb.currentData()
+        
+        for e in v.get("entries", []):
+            if e["ledger_id"] not in [party_id, purchase_id]:
+                row = self._add_tax_row(ledger_id=e["ledger_id"])
+                val = e["amount"]
+                # For Debit Note, base direction for adjustments/taxes is Cr
+                if e["dr_cr"] == "Dr":
                     val = -val
-                row_data["amt"].setValue(val)
-                # We do NOT mark as is_auto_tax here; _recalculate will mark it 
-                # if it matches its calculated tax ledgers.
-            
-            self._recalculate()
-            
-        except Exception as e:
-            print(f"Error populating credit note: {e}")
-
-    def reject(self):
-        msg = "Are you sure you want to discard all changes?"
-        if QMessageBox.question(self, "Confirm Discard", msg, 
-                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-            super().reject()
-
+                row["amt"].setValue(val)
+        
+        self._recalculate()

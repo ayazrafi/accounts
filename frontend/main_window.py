@@ -17,10 +17,13 @@ from frontend.pages.ledger_report import LedgerReportPage
 from frontend.pages.inventory import InventoryPage
 from frontend.pages.balance_sheet import BalanceSheetPage
 from frontend.pages.settings import SettingsPage
+from frontend.pages.credit_note import CreditNoteDialog
+from frontend.pages.debit_note import DebitNoteDialog
 from frontend.components.sidebar import Sidebar
 from frontend.components.header import HeaderBar, DARK_QSS
 from frontend.theme import THEME, GLOBAL_QSS
 import frontend.session as session
+from frontend.pages.import_sales import ImportSalesVoucherDialog
 
 # Page title / breadcrumb map (index → (title, breadcrumb))
 _PAGE_META = {
@@ -60,6 +63,7 @@ class MainWindow(QMainWindow):
         # ── Sidebar ───────────────────────────────────────────────────
         self.sidebar = Sidebar()
         self.sidebar.nav_item_changed.connect(self._on_nav_changed)
+        self.sidebar.import_requested.connect(self.open_import_sales)
         root_layout.addWidget(self.sidebar)
 
         # ── Right panel (header + pages) ──────────────────────────────
@@ -91,6 +95,7 @@ class MainWindow(QMainWindow):
         ]
         for p in self.page_list:
             self.pages.addWidget(p)
+        
         right_layout.addWidget(self.pages, 1)
 
         root_layout.addWidget(right_panel, 1)
@@ -127,10 +132,12 @@ class MainWindow(QMainWindow):
 
         # Alt+C → navigate to Companies  (index 1)
         sc_company = QShortcut(QKeySequence("Alt+C"), self)
+        sc_company.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_company.activated.connect(lambda: self._navigate_to(1))
 
         # Alt+V → navigate to Voucher Entry (index 3)
         sc_voucher = QShortcut(QKeySequence("Alt+V"), self)
+        sc_voucher.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_voucher.activated.connect(lambda: self._navigate_to(3))
 
         # Alt+D → Dashboard
@@ -143,31 +150,41 @@ class MainWindow(QMainWindow):
 
         # Alt+I → Inventory
         sc_inv = QShortcut(QKeySequence("Alt+I"), self)
+        sc_inv.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_inv.activated.connect(lambda: self._navigate_to(7))
 
         # Alt+T → Trial Balance
         sc_tb = QShortcut(QKeySequence("Alt+T"), self)
+        sc_tb.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_tb.activated.connect(lambda: self._navigate_to(4))
 
         # Alt+B → Balance Sheet
         sc_bs = QShortcut(QKeySequence("Alt+B"), self)
+        sc_bs.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_bs.activated.connect(lambda: self._navigate_to(8))
 
         # Alt+P → Profit & Loss
         sc_pl = QShortcut(QKeySequence("Alt+P"), self)
+        sc_pl.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_pl.activated.connect(lambda: self._navigate_to(5))
 
         # Alt+S → Ledger Statement (Report)
         sc_rep = QShortcut(QKeySequence("Alt+S"), self)
+        sc_rep.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_rep.activated.connect(lambda: self._navigate_to(6))
         
         # Alt+G → Settings
         sc_sett = QShortcut(QKeySequence("Alt+G"), self)
+        sc_sett.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_sett.activated.connect(lambda: self._navigate_to(9))
         
         # Ctrl+M → Toggle Sidebar
         sc_side = QShortcut(QKeySequence("Ctrl+M"), self)
         sc_side.activated.connect(self.sidebar.toggle)
+
+        # Ctrl+Alt+I → Import Sales Voucher
+        sc_import = QShortcut(QKeySequence("Ctrl+Alt+I"), self)
+        sc_import.activated.connect(self.open_import_sales)
 
     # ──────────────────────────────────────────────────────────────────
     def _navigate_to(self, index: int):
@@ -180,6 +197,32 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentIndex(index)
         title, bc = _PAGE_META.get(index, ("", "Home"))
         self.header.set_page(title, bc)
+
+    def open_credit_note(self, voucher=None):
+        """Open CreditNoteDialog as a maximized modal dialog."""
+        dlg = CreditNoteDialog(self)
+        dlg.set_voucher(voucher)
+        if dlg.exec():
+            # If we are on the Voucher Entry page, refresh the list
+            if self.pages.currentIndex() == 3:
+                self.page_list[3]._load()
+
+    def open_debit_note(self, voucher=None):
+        """Open DebitNoteDialog as a maximized modal dialog."""
+        dlg = DebitNoteDialog(self)
+        dlg.set_voucher(voucher)
+        if dlg.exec():
+            # If we are on the Voucher Entry page, refresh the list
+            if self.pages.currentIndex() == 3:
+                self.page_list[3]._load()
+
+    def open_import_sales(self):
+        """Open ImportSalesVoucherDialog."""
+        dlg = ImportSalesVoucherDialog(self)
+        if dlg.exec():
+            # If we are on the Voucher Entry page, refresh the list
+            if self.pages.currentIndex() == 3:
+                self.page_list[3]._load()
 
     # ──────────────────────────────────────────────────────────────────
     def _on_theme_toggle(self, dark: bool):

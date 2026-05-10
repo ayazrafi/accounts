@@ -109,6 +109,7 @@ class Sidebar(QFrame):
     """Animated collapsible sidebar.  Emits nav_item_changed(page_index)."""
 
     nav_item_changed = Signal(int)
+    import_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,6 +181,12 @@ class Sidebar(QFrame):
             btn.clicked.connect(lambda checked=False, i=idx: self._on_nav_click(i))
             nav_layout.addWidget(btn)
             self._nav_buttons.append(btn)
+
+        nav_layout.addSpacing(10)
+        import_btn = _NavButton("frontend/assets/icons/upload.svg", "Import Excel", "Ctrl+Alt+I", -1)
+        import_btn.clicked.connect(self.import_requested.emit)
+        nav_layout.addWidget(import_btn)
+        self._nav_buttons.append(import_btn)
 
         nav_layout.addStretch()
         scroll.setWidget(nav_container)

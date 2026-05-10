@@ -118,14 +118,27 @@ def edit_voucher(voucher_id):
 @voucher_bp.get("/<voucher_id>/stock-txns")
 def voucher_stock_txns(voucher_id):
     from bson import ObjectId
-    from backend.models.inventory import StockTransaction, get_stock_item
+    from backend.models.inventory import StockTransaction, get_stock_item, get_units
     try:
         txns = StockTransaction.objects(voucher_id=ObjectId(voucher_id))
     except Exception:
         return jsonify([])
+    
+    # Pre-fetch units for name resolution
+    try:
+        units_list = get_units()
+        unit_map = {str(u["_id"]): u["name"] for u in units_list}
+    except Exception:
+        unit_map = {}
+
     result = []
     for t in txns:
         item = get_stock_item(str(t.item_id))
+        
+        # Resolve unit name
+        u_id = item["unit"] if item else ""
+        u_name = unit_map.get(str(u_id), "PCS") if u_id else "PCS"
+        
         result.append({
             "item_id":   str(t.item_id),
             "item_name": t.item_name or "",
@@ -135,7 +148,7 @@ def voucher_stock_txns(voucher_id):
             "discount":  t.discount or 0.0,
             "scheme":    t.scheme or 0.0,
             "amount":    t.value or 0.0,
-            "unit":      item["unit"]     if item else "PCS",
+            "unit":      u_name,
             "gst_rate":  item["gst_rate"] if item else 0.0,
             "hsn_sac":   item["hsn_sac"]  if item else "",
             "cgst":      item["cgst"]     if item else 0.0,

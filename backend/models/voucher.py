@@ -168,6 +168,20 @@ def get_voucher(voucher_id: str) -> dict | None:
     party_side = "Dr" if v.voucher_type in ["Sales", "Payment", "Debit Note"] else "Cr"
     party_item = next((i for i in items if i.dr_cr == party_side), None)
 
+    items_list = [
+        {
+            "_id":         str(i.id),
+            "ledger_id":   str(i.ledger_id) if i.ledger_id else "",
+            "ledger_name": i.ledger_name,
+            "dr_cr":       i.dr_cr,
+            "amount":      i.amount,
+            "group_name":  group_map.get(str(ledgers[str(i.ledger_id)].group)) if i.ledger_id and str(i.ledger_id) in ledgers else "",
+            "ledger_address": ledgers[str(i.ledger_id)].address if i.ledger_id and str(i.ledger_id) in ledgers else "",
+            "ledger_gst_no":  ledgers[str(i.ledger_id)].gst_no if i.ledger_id and str(i.ledger_id) in ledgers else "",
+        }
+        for i in items
+    ]
+
     return {
         "_id":          str(v.id),
         "voucher_no":   v.voucher_no,
@@ -177,19 +191,10 @@ def get_voucher(voucher_id: str) -> dict | None:
         "company_id":   str(v.company_id) if v.company_id else "",
         "party_name":   party_item.ledger_name if party_item else "N/A",
         "party_ledger_id": str(party_item.ledger_id) if party_item and party_item.ledger_id else None,
-        "items": [
-            {
-                "_id":         str(i.id),
-                "ledger_id":   str(i.ledger_id) if i.ledger_id else "",
-                "ledger_name": i.ledger_name,
-                "dr_cr":       i.dr_cr,
-                "amount":      i.amount,
-                "group_name":  group_map.get(str(ledgers[str(i.ledger_id)].group)) if i.ledger_id and str(i.ledger_id) in ledgers else "",
-                "ledger_address": ledgers[str(i.ledger_id)].address if i.ledger_id and str(i.ledger_id) in ledgers else "",
-                "ledger_gst_no":  ledgers[str(i.ledger_id)].gst_no if i.ledger_id and str(i.ledger_id) in ledgers else "",
-            }
-            for i in items
-        ],
+        "amount": party_item.amount if party_item else 0.0,
+        "outstanding_amount": v.outstanding_amount,
+        "items": items_list,
+        "entries": items_list,
         "linking": linking,
         "metadata": v.metadata or {}
     }

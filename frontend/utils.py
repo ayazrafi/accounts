@@ -121,9 +121,9 @@ class _KeyboardNavFilter(QObject):
                 return w
         return None
 
-    def _is_blank(self, w):
+    def _should_go_back(self, w):
         if isinstance(w, QLineEdit):
-            return not w.text().strip()
+            return w.cursorPosition() == 0
         if isinstance(w, (QComboBox, SearchableComboBox)):
             if hasattr(w, "view") and w.view().isVisible():
                 return False
@@ -131,8 +131,6 @@ class _KeyboardNavFilter(QObject):
                 return False
             return True
         if isinstance(w, (QSpinBox, QDoubleSpinBox, QDateEdit)):
-            if isinstance(w, QDateEdit) and w.calendarWidget() and w.calendarWidget().isVisible():
-                return False
             return True
         return False
 
@@ -160,7 +158,7 @@ class _KeyboardNavFilter(QObject):
 
         # Backward navigation (Backspace when blank/numeric/date)
         if key == Qt.Key.Key_Backspace:
-            if self._is_blank(obj):
+            if self._should_go_back(obj):
                 prv = self._get_prev()
                 if prv:
                     self._focus_and_select(prv)
@@ -183,11 +181,21 @@ def setup_enter_nav(dialog, widgets, accept_callback=None):
     if not hasattr(dialog, "_enter_filters"):
         dialog._enter_filters = []
 
+    # Remove previous filters if any to avoid duplicates
+    for f_item in dialog._enter_filters:
+        try:
+            if isinstance(f_item, tuple):
+                w, f = f_item
+                w.removeEventFilter(f)
+        except:
+            pass
+    dialog._enter_filters = []
+
     for i, w in enumerate(widgets):
         # Use event filter for ALL navigation to ensure consistency (Backspace + Enter)
         f = _KeyboardNavFilter(widgets, i, accept_fn)
         w.installEventFilter(f)
-        dialog._enter_filters.append(f)
+        dialog._enter_filters.append((w, f))
 
     # Automatically focus the first available widget when the dialog opens
     def _initial_focus():

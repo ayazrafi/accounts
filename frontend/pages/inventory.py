@@ -9,6 +9,7 @@ from PySide6.QtGui import QIcon
 import frontend.api_client as api
 from frontend.utils import setup_enter_nav, SearchableComboBox, wire_create_new, get_icon, CREATE_NEW_LABEL, format_indian_number, format_inr
 from frontend.components.cards import PillActionButton, IconActionButton
+import frontend.session as session
 
 
 class StockCategoryDialog(QDialog):
@@ -25,8 +26,9 @@ class StockCategoryDialog(QDialog):
         form = QFormLayout(self)
         self.name = QLineEdit(category["name"] if category else "")
         self.group_cb = SearchableComboBox()
-        for g in self._groups: self.group_cb.addItem(g["name"])
-        if category: self.group_cb.setCurrentText(category.get("stock_group", "General"))
+        for g in self._groups: self.group_cb.addItem(g["name"], str(g.get("_id", "")))
+        if category: self.group_cb.setCurrentData(str(category.get("stock_group", "")))
+        else: self.group_cb.setCurrentIndex(0)
         
         # "Create New Stock Group" option
         def _create_stock_group():
@@ -85,7 +87,7 @@ class StockCategoryDialog(QDialog):
     def get_data(self):
         return {
             "name": self.name.text().strip(),
-            "stock_group": self.group_cb.currentText(),
+            "stock_group": self.group_cb.currentData(),
             "price": self.price.value(),
             "super_net": self.super_net.value(),
             "net": self.net.value(),
@@ -93,6 +95,7 @@ class StockCategoryDialog(QDialog):
             "cgst": self.cgst.value(),
             "sgst": self.sgst.value(),
             "igst": self.igst.value(),
+            "company_id": session.company_id
         }
 
 
@@ -126,14 +129,14 @@ class StockItemDialog(QDialog):
         self.gst_rate.setValue(item.get("gst_rate", 18) if item else 18)
         self.unit_cb = SearchableComboBox()
         self.unit_cb.addItem("Select Unit", None)
-        for u in self._units: self.unit_cb.addItem(u if isinstance(u, str) else u["name"])
-        if item: self.unit_cb.setCurrentText(item.get("unit", ""))
+        for u in self._units: self.unit_cb.addItem(u["name"], str(u["_id"]))
+        if item: self.unit_cb.setCurrentData(str(item.get("unit", "")))
         else: self.unit_cb.setCurrentIndex(0)
         
         self.group_cb = SearchableComboBox()
         self.group_cb.addItem("Select Stock Group", None)
-        for g in self._groups: self.group_cb.addItem(g["name"])
-        if item: self.group_cb.setCurrentText(item.get("stock_group", ""))
+        for g in self._groups: self.group_cb.addItem(g["name"], str(g["_id"]))
+        if item: self.group_cb.setCurrentData(str(item.get("stock_group", "")))
         else: self.group_cb.setCurrentIndex(0)
         
         self.cat_cb = SearchableComboBox()
@@ -145,7 +148,8 @@ class StockItemDialog(QDialog):
             if dlg.exec():
                 data = dlg.get_data()
                 try:
-                    api.create_stock_category(data)
+                    resp = api.create_stock_category(data)
+                    data["_id"] = resp.get("id")
                     return (data["name"], data)
                 except Exception as ex:
                     QMessageBox.warning(self, "Error", str(ex))
@@ -174,9 +178,10 @@ class StockItemDialog(QDialog):
             name, ok = QInputDialog.getText(self, "New Stock Group", "Stock Group Name:")
             if ok and name.strip():
                 try:
-                    api.create_stock_group({"name": name.strip()})
-                    self._groups.append({"name": name.strip()})
-                    return (name.strip(), name.strip())
+                    resp = api.create_stock_group({"name": name.strip()})
+                    new_id = resp.get("id")
+                    self._groups.append({"_id": new_id, "name": name.strip()})
+                    return (name.strip(), new_id)
                 except Exception as ex:
                     QMessageBox.warning(self, "Error", str(ex))
             return None
@@ -189,9 +194,10 @@ class StockItemDialog(QDialog):
             if ok and name.strip():
                 uname = name.strip().upper()
                 try:
-                    api.create_unit({"name": uname})
-                    self._units.append(uname)
-                    return (uname, uname)
+                    resp = api.create_unit({"name": uname})
+                    new_id = resp.get("id")
+                    self._units.append({"_id": new_id, "name": uname})
+                    return (uname, new_id)
                 except Exception as ex:
                     QMessageBox.warning(self, "Error", str(ex))
             return None
@@ -241,24 +247,32 @@ class StockItemDialog(QDialog):
         form.addRow(btns)
         
         self._refresh_categories()
-        if item: self.cat_cb.setCurrentText(item.get("category", ""))
 
     def _refresh_categories(self):
         self.cat_cb.blockSignals(True)
         try:
             self.cat_cb.clear()
             self.cat_cb.addItem("Select Stock Category", None)
-            group_name = self.group_cb.currentText()
-            if not group_name or "Select" in group_name:
+            group_id = self.group_cb.currentData()
+            if not group_id:
                 self.cat_cb.addItem(CREATE_NEW_LABEL)
                 return
             try:
-                cats = api.list_stock_categories(stock_group=group_name)
+                cats = api.list_stock_categories(stock_group=group_id)
                 for c in cats:
                     self.cat_cb.addItem(c["name"], c)
             except Exception:
                 pass
             self.cat_cb.addItem(CREATE_NEW_LABEL)
+            
+            # If we are editing an item, try to select its category
+            if self._item:
+                cat_id = str(self._item.get("category", ""))
+                for i in range(self.cat_cb.count()):
+                    data = self.cat_cb.itemData(i)
+                    if isinstance(data, dict) and str(data.get("_id", "")) == cat_id:
+                        self.cat_cb.setCurrentIndex(i)
+                        break
         finally:
             self.cat_cb.blockSignals(False)
 
@@ -277,15 +291,14 @@ class StockItemDialog(QDialog):
             self.accept()
 
     def get_data(self):
-        def _val(cb):
-            t = cb.currentText()
-            return "" if t.startswith("Select ") else t
+        cat_data = self.cat_cb.currentData()
+        cat_id = cat_data["_id"] if isinstance(cat_data, dict) else cat_data
 
         return {
             "name": self.name.text().strip(),
-            "stock_group": _val(self.group_cb),
-            "category": _val(self.cat_cb),
-            "unit": _val(self.unit_cb),
+            "stock_group": self.group_cb.currentData(),
+            "category": cat_id,
+            "unit": self.unit_cb.currentData(),
             "hsn_sac": self.hsn.text().strip(),
             "gst_rate": self.gst_rate.value(),
             "price": self.price.value(),
@@ -402,14 +415,19 @@ class StockItemsTab(QWidget):
 
     def _load(self):
         self.table.setRowCount(0)
-        try: items = api.list_stock_items()
+        try:
+            items = api.list_stock_items()
+            groups = {str(g["_id"]): g["name"] for g in api.list_stock_groups()}
+            units  = {str(u["_id"]): u["name"] for u in api.list_units()}
         except Exception as ex:
             QMessageBox.warning(self, "Error", str(ex)); return
         for row, item in enumerate(items):
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(item.get("name", "")))
-            self.table.setItem(row, 1, QTableWidgetItem(item.get("stock_group", "")))
-            self.table.setItem(row, 2, QTableWidgetItem(item.get("unit", "")))
+            g_id = item.get("stock_group", "")
+            self.table.setItem(row, 1, QTableWidgetItem(groups.get(g_id, g_id)))
+            u_id = item.get("unit", "")
+            self.table.setItem(row, 2, QTableWidgetItem(units.get(u_id, u_id)))
             self.table.setItem(row, 3, QTableWidgetItem(item.get("hsn_sac", "")))
             self.table.setItem(row, 4, QTableWidgetItem(str(item.get("gst_rate", 0)) + "%"))
             self.table.setItem(row, 5, QTableWidgetItem(str(item.get("opening_qty", 0))))
@@ -490,12 +508,14 @@ class StockCategoriesTab(QWidget):
         self.table.setRowCount(0)
         try:
             cats = api.list_stock_categories()
+            groups = {str(g["_id"]): g["name"] for g in api.list_stock_groups()}
         except Exception as ex:
             QMessageBox.warning(self, "Error", str(ex)); return
         for row, c in enumerate(cats):
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(c.get("name", "")))
-            self.table.setItem(row, 1, QTableWidgetItem(c.get("stock_group", "")))
+            g_id = c.get("stock_group", "")
+            self.table.setItem(row, 1, QTableWidgetItem(groups.get(g_id, g_id)))
             self.table.setItem(row, 2, QTableWidgetItem(format_indian_number(c.get('price', 0))))
             self.table.setItem(row, 3, QTableWidgetItem(format_indian_number(c.get('net', 0))))
             

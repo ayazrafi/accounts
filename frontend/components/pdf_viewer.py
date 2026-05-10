@@ -68,8 +68,13 @@ class InvoicePdfViewer(QDialog):
 
     def _generate_html(self):
         docs = []
+        v_type = self.voucher_data.get("voucher_type", "")
         for label in self._copy_labels():
-            if self.invoice_type == "B":
+            if v_type == "Credit Note":
+                docs.append(self._generate_credit_note_html(label))
+            elif v_type == "Debit Note":
+                docs.append(self._generate_debit_note_html(label))
+            elif self.invoice_type == "B":
                 docs.append(self._generate_format_b_html(label))
             elif self.invoice_type == "C":
                 docs.append(self._generate_format_c_html(label))
@@ -78,18 +83,44 @@ class InvoicePdfViewer(QDialog):
         return self._combine_pages(docs)
 
     def _generate_format_a_html(self, copy_label="Original Copy"):
+        return self._generate_invoice_template(copy_label, "TAX INVOICE")
+
+    def _generate_credit_note_html(self, copy_label="Original Copy"):
+        return self._generate_invoice_template(copy_label, "CREDIT NOTE")
+
+    def _generate_debit_note_html(self, copy_label="Original Copy"):
+        return self._generate_invoice_template(copy_label, "DEBIT NOTE / PURCHASE RETURN")
+
+    def _generate_invoice_template(self, copy_label, title_label):
         v = self.voucher_data
         c = self.company_data
         items = v.get("invoice_items", [])
-
         accounting_items = v.get("items", [])
         party_name = ""; party_address = "N/A"; party_gstin = "N/A"
-        adj_ledgers = []   # all non-party, non-sales/purchase entries (tax, discount, expense, etc.)
+        adj_ledgers = []
         grand_total = 0.0
 
         is_sales = v.get("voucher_type") == "Sales"
-        party_dr_cr   = "Dr" if is_sales else "Cr"   
-        sp_dr_cr      = "Cr" if is_sales else "Dr"   
+        is_credit_note = v.get("voucher_type") == "Credit Note"
+        is_debit_note = v.get("voucher_type") == "Debit Note"
+        
+        # Determine Dr/Cr roles for Party and Sales/Purchase
+        # Sales: Party (Dr), Sales (Cr)
+        # Purchase: Party (Cr), Purchase (Dr)
+        # Credit Note (Sales Return): Party (Cr), Sales Return (Dr)
+        # Debit Note (Purchase Return): Party (Dr), Purchase Return (Cr)
+        
+        if is_sales:
+            party_dr_cr, sp_dr_cr = "Dr", "Cr"
+        elif v.get("voucher_type") == "Purchase":
+            party_dr_cr, sp_dr_cr = "Cr", "Dr"
+        elif is_credit_note:
+            party_dr_cr, sp_dr_cr = "Cr", "Dr"
+        elif is_debit_note:
+            party_dr_cr, sp_dr_cr = "Dr", "Cr"
+        else:
+            # Fallback
+            party_dr_cr, sp_dr_cr = "Dr", "Cr"
 
         for e in accounting_items:
             dr_cr = e.get("dr_cr")
@@ -101,25 +132,20 @@ class InvoicePdfViewer(QDialog):
                 party_address = e.get("ledger_address", "")
                 party_gstin   = e.get("ledger_gst_no", "")
             elif any(x in gname for x in ["DUTIES", "TAX", "EXPENSE", "INCOME", "DISCOUNT"]):
-                # Explicitly include these groups in adjustments regardless of Dr/Cr side
                 name = e.get("ledger_name", "")
                 amt  = e.get("amount", 0.0)
                 if name and amt:
                     adj_ledgers.append([name, amt, dr_cr])
             elif dr_cr == sp_dr_cr and any(x in gname for x in ["SALES", "PURCHASE"]):
-                # Main Sales/Purchase ledger - skip it
                 pass  
             else:
-                # Fallback for any other adjustments
                 name = e.get("ledger_name", "")
                 amt  = e.get("amount", 0.0)
                 if name and amt:
                     adj_ledgers.append([name, amt, dr_cr])
 
-        # Gross Subtotal = sum of (Qty * Rate) before any item-level discounts
         gross_subtotal = sum(it.get("qty", 0.0) * it.get("rate", 0.0) for it in items)
 
-        # Aggregate item-level discounts and schemes
         total_item_disc = 0.0
         total_item_scheme = 0.0
         for it in items:
@@ -130,25 +156,20 @@ class InvoicePdfViewer(QDialog):
             total_item_disc += (q * r * d_p / 100.0)
             total_item_scheme += s_v
 
-        # Add aggregated item adjustments if they exist and aren't already represented as ledgers
         if total_item_disc > 0.005:
             adj_ledgers.append(["Total Discount (Item-wise)", total_item_disc, "Cr" if is_sales else "Dr"])
         if total_item_scheme > 0.005:
             adj_ledgers.append(["Total Scheme (Item-wise)", total_item_scheme, "Cr" if is_sales else "Dr"])
 
-        # STRICT SORTING: Duties & Taxes -> Expenses -> Discounts
         def adj_sort_key(item_list):
             name = item_list[0].upper().strip()
-            # 1. Duties & Taxes (Top)
             if any(t in name for t in ["CGST", "SGST", "IGST", "UTGST", "TAX", "DUTY", "VAT", "GST", "CESS", "SURCHARGE", "TDS", "TCS"]):
                 return 0
-            # 2. Expenses (Mid)
             if any(e in name for e in ["FREIGHT", "PACKING", "FORWARDING", "EXPENSE", "CHARGE", "ROUND", "INSURANCE", "TRANSPORT", "HANDLING", "POSTAGE", "COURIER", "ADJUSTMENT"]):
                 return 1
-            # 3. Discounts & Schemes (Bottom)
             if any(d in name for d in ["DISCOUNT", "SCHEME", "LESS", "CASH DISC", "REBATE", "OFFER", "DEDUCTION"]):
                 return 2
-            return 1 # Default to middle for unknown ledgers
+            return 1
 
         adj_ledgers.sort(key=adj_sort_key)
 
@@ -177,11 +198,17 @@ class InvoicePdfViewer(QDialog):
 
         amt_words = num_to_words(grand_total)
 
+        # Credit Note specific metadata
+        meta = v.get("metadata", {})
+        reason = meta.get("reason", "N/A")
+        # In Credit Note, narration often contains original invoice info
+        narration = v.get("narration", "")
+
         html = f"""
         <html>
         <head>
             <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
                 html, body {{
                     font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
                     padding: 0; margin: 0; width: 100%; color: #263238;
@@ -197,8 +224,9 @@ class InvoicePdfViewer(QDialog):
                 }}
                 .company-name {{ font-size: 28px; font-weight: 900; color: #000; text-transform: uppercase; line-height: 1; }}
                 .tax-invoice-label {{
-                    font-size: 18px; font-weight: bold; border: 2px solid #000;
-                    padding: 4px 12px; display: inline-block; background: #000; color: #fff;
+                    font-size: 18px; font-weight: 900; border: 2px solid #000;
+                    padding: 4px 16px; display: inline-block; background: #000; color: #fff;
+                    letter-spacing: 1px;
                 }}
                 .table-head {{ background-color: #cfd8dc; font-weight: bold; font-size: 9px; text-transform: uppercase; }}
                 .full-width-table {{ width: 100% !important; border-collapse: collapse; table-layout: fixed; }}
@@ -208,19 +236,21 @@ class InvoicePdfViewer(QDialog):
                 .text-center {{ text-align: center; }}
                 .padding-xs  {{ padding: 2px 4px; }}
                 .padding-sm  {{ padding: 5px 8px; }}
+                .meta-label {{ font-size: 10px; font-weight: bold; text-transform: uppercase; color: #546e7a; }}
+                .meta-value {{ font-size: 14px; font-weight: bold; margin-top: 2px; }}
             </style>
         </head>
         <body>
             <table class="invoice-container" cellpadding="0" cellspacing="0">
                 <!-- Header -->
                 <tr>
-                    <td colspan="3" class="text-center" style="padding: 10px; border-bottom: 2px solid #000; position: relative;">
-                        <div style="position:absolute; right:10px; top:8px; font-size:11px; font-style:italic; font-weight:normal;">{copy_label}</div>
-                        <div class="tax-invoice-label">TAX INVOICE</div>
+                    <td colspan="3" class="text-center" style="padding: 12px; border-bottom: 2px solid #000; position: relative;">
+                        <div style="position:absolute; right:10px; top:12px; font-size:11px; font-style:italic; font-weight:normal;">{copy_label}</div>
+                        <div class="tax-invoice-label">{title_label}</div>
                     </td>
                 </tr>
                 <tr>
-                    <td colspan="2" style="padding: 15px; vertical-align: top; width: 65%;">
+                    <td colspan="2" style="padding: 15px; vertical-align: top; width: 60%;">
                         <div class="company-name">{c.get('name', 'Company Name')}</div>
                         <div style="font-size: 12px; margin-top: 8px; line-height: 1.4;">
                             {c.get('address', 'Address')}<br>
@@ -228,31 +258,27 @@ class InvoicePdfViewer(QDialog):
                             <b>PAN:</b> {c.get('pan', '')}
                         </div>
                     </td>
-                    <td style="padding: 0; vertical-align: top; width: 35%;">
+                    <td style="padding: 0; vertical-align: top; width: 40%;">
                         <table class="full-width-table" style="height: 100%;">
                             <tr>
                                 <td class="padding-sm" style="border-top:none; border-left:none;">
-                                    <div style="font-size: 10px; font-weight: bold; text-transform: uppercase;">Invoice No.</div>
-                                    <div style="font-size: 14px; font-weight: bold; margin-top: 2px;">{v.get('voucher_no', '')}</div>
+                                    <div class="meta-label">{title_label.split()[0]} No.</div>
+                                    <div class="meta-value">{v.get('voucher_no', '')}</div>
                                 </td>
                                 <td class="padding-sm" style="border-top:none; border-right:none;">
-                                    <div style="font-size: 10px; font-weight: bold; text-transform: uppercase;">Dated</div>
-                                    <div style="font-size: 14px; font-weight: bold; margin-top: 2px;">{v.get('date', '')}</div>
+                                    <div class="meta-label">Dated</div>
+                                    <div class="meta-value">{v.get('date', '')}</div>
                                 </td>
                             </tr>
-                            <tr>
-                                <td colspan="2" class="padding-sm" style="border-left:none; border-right:none; border-bottom:none;">
-                                    <div style="font-size: 10px; font-weight: bold; text-transform: uppercase;">Mode/Terms of Payment</div>
-                                    <div style="font-size: 12px; margin-top: 2px;">{v.get('payment_terms', 'Net 30')}</div>
-                                </td>
-                            </tr>
+                            {f"<tr><td class='padding-sm' style='border-left:none;'><div class='meta-label'>Original Inv No.</div><div style='font-size: 12px; font-weight: bold; margin-top: 2px;'>{narration.split('against Inv#', 1)[1].split(' | ', 1)[0] if 'against Inv#' in narration else 'N/A'}</div></td><td class='padding-sm' style='border-right:none;'><div class='meta-label'>Reason</div><div style='font-size: 11px; font-weight: bold; margin-top: 2px;'>{reason}</div></td></tr>" if is_credit_note or is_debit_note else "<tr><td colspan='2' class='padding-sm' style='border-left:none; border-right:none; border-bottom:none;'><div class='meta-label'>Mode/Terms of Payment</div><div style='font-size: 12px; margin-top: 2px;'>" + v.get('payment_terms', 'Net 30') + "</div></td></tr>"}
+                            {f"<tr><td colspan='2' class='padding-sm' style='border-left:none; border-right:none; border-top: 1px solid #000; border-bottom:none;'><div class='meta-label'>Supplier CN Ref.</div><div style='font-size: 12px; font-weight: bold; margin-top: 2px;'>{meta.get('supplier_cn_no', 'N/A')}</div></td></tr>" if is_debit_note else ""}
                         </table>
                     </td>
                 </tr>
                 <!-- Billing -->
                 <tr>
                     <td style="width: 50%; vertical-align: top;">
-                        <div class="section-header">Bill to</div>
+                        <div class="section-header">{"Customer" if is_sales or is_credit_note else "Supplier"} (Bill to)</div>
                         <div style="padding: 8px; min-height: 80px;">
                             <div style="font-size: 14px; font-weight: bold; text-transform: uppercase;">{party_name}</div>
                             <div style="font-size: 11px; margin-top: 4px; line-height: 1.4;">
@@ -294,7 +320,7 @@ class InvoicePdfViewer(QDialog):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
             q = float(item.get('qty', 0.0) or 0.0)
             r = float(item.get('rate', 0.0) or 0.0)
-            line_amt = q * r
+            line_amt = item.get('amount', q * r) # Use 'amount' if available (pre-tax taxable value)
             html += f"""
                                 <tr>
                                     <td class="padding-xs text-center" style="font-size:11px;">{i}</td>
@@ -307,17 +333,18 @@ class InvoicePdfViewer(QDialog):
                                 </tr>
             """
 
+        # Fill empty space
         html += """
                                 <tr>
-                                    <td class="padding-sm" colspan="7" style="height:50px;"></td>
+                                    <td class="padding-sm" colspan="7" style="height:40px;"></td>
                                 </tr>
         """
 
         # Gross Total row
         html += f"""
-                                <tr style="background-color:#f5f5f5;">
+                                <tr style="background-color:#f8f9fa;">
                                     <td colspan="6" class="padding-sm text-right"
-                                        style="font-size:11px; font-weight:bold; text-transform:uppercase;">
+                                        style="font-size:11px; font-weight:bold; text-transform:uppercase; color:#455a64;">
                                         Gross Total
                                     </td>
                                     <td class="padding-sm text-right" style="font-size:12px; font-weight:bold;">{format_indian_number(gross_subtotal)}</td>
@@ -326,15 +353,11 @@ class InvoicePdfViewer(QDialog):
 
         # Adjustments list
         for lname, lamt, ldr_cr in adj_ledgers:
-            # Determine if it's a deduction (Discount/Scheme) or Addition (Tax/Expense)
-            # Sales: Dr Party, Cr Sales. Deductions are Dr (like Discount).
-            # But in Sales voucher tax section, you typically select a Discount ledger and enter amount.
-            # If Discount is Dr side in Sales, it's a deduction.
-            is_deduction = False
             up_name = lname.upper()
-            if any(d in up_name for d in ["DISCOUNT", "SCHEME", "LESS", "CASH DISC", "REBATE", "OFFER", "DEDUCTION"]):
-                is_deduction = True
+            is_deduction = any(d in up_name for d in ["DISCOUNT", "SCHEME", "LESS", "CASH DISC", "REBATE", "OFFER", "DEDUCTION"])
             
+            # In Credit Note, we are returning money, so everything is usually positive in the display 
+            # unless it's a deduction from the credit note itself.
             disp_amt = f"({format_indian_number(lamt)})" if is_deduction else format_indian_number(lamt)
             html += f"""
                                 <tr>
@@ -344,12 +367,12 @@ class InvoicePdfViewer(QDialog):
                                 </tr>
             """
 
-        # Final Invoice Value
+        # Final Value
         html += f"""
                                 <tr style="background-color:#cfd8dc;">
                                     <td colspan="6" class="padding-sm text-right"
                                         style="font-size:12px; font-weight:bold; text-transform:uppercase;">
-                                        Total Invoice Value
+                                        Total {title_label} Value
                                     </td>
                                     <td class="padding-sm text-right"
                                         style="font-size:14px; font-weight:900; border-top:2px solid #000;">{format_indian_number(grand_total)}</td>
@@ -364,15 +387,13 @@ class InvoicePdfViewer(QDialog):
                         <div style="font-size:13px; font-weight:bold; margin-top:4px;">Indian Rupees {amt_words} Only</div>
                     </td>
                 </tr>
+                {"<tr><td colspan='3' style='padding:10px; border-bottom: 2px solid #000;'><div style='font-size:10px; font-weight:bold; text-transform:uppercase; color:#546e7a;'>Narration / Remarks</div><div style='font-size:11px; margin-top:4px; line-height: 1.4;'>" + escape(narration) + "</div></td></tr>" if narration else ""}
                 <tr>
                     <td colspan="2" style="padding:15px; vertical-align:top;">
-                        <div style="font-size:10px; font-weight:bold; text-transform:uppercase; margin-bottom:8px;">Declaration / Bank Details</div>
+                        <div style="font-size:10px; font-weight:bold; text-transform:uppercase; margin-bottom:8px;">Declaration</div>
                         <div style="font-size:10px; line-height:1.5;">
-                            We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.<br><br>
-                            <b>Bank Name:</b> {c.get('bank_name','')}<br>
-                            <b>A/c No.:</b>   {c.get('account_number','')}<br>
-                            <b>Branch:</b>    {c.get('branch_name','')}<br>
-                            <b>IFSC Code:</b> {c.get('ifsc_code','')}
+                            We declare that this document shows the actual particulars of the return/adjustment of goods described and that all particulars are true and correct.<br><br>
+                            This is a computer generated document.
                         </div>
                     </td>
                     <td style="padding:15px; vertical-align:bottom; text-align:right;">

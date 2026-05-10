@@ -79,7 +79,8 @@ class InvoiceItemRow(QWidget):
 
         self.unit = SearchableComboBox()
         self.unit.addItem("Select Unit", None)
-        self.unit.addItems(units)
+        for u in units:
+            self.unit.addItem(u["name"], str(u["_id"]))
         self.unit.setFixedWidth(70)
 
         def _create_unit_row():
@@ -133,7 +134,7 @@ class InvoiceItemRow(QWidget):
                 self._current_item = item
                 self.gst_rate.setValue(item.get("gst_rate", 0))
                 self.rate.setValue(item.get("price", 0))
-                self.unit.setCurrentText(item.get("unit", "PCS"))
+                self.unit.setCurrentData(str(item.get("unit", "")))
         self._calc()
 
     changed = Signal()
@@ -145,8 +146,8 @@ class InvoiceItemRow(QWidget):
 
     def get_data(self):
         item = self.item_cb.currentData()
-        unit = self.unit.currentData() or self.unit.currentText()
-        if not item or self.qty.value() == 0 or unit == "Select Unit":
+        unit_id = self.unit.currentData()
+        if not item or self.qty.value() == 0 or not unit_id:
             return None
         
         qty  = self.qty.value()
@@ -166,7 +167,7 @@ class InvoiceItemRow(QWidget):
         return {
             "item_id":   item["_id"],
             "item_name": item["name"],
-            "unit":      unit,
+            "unit":      unit_id,
             "qty":       qty,
             "rate":      rate,
             "amount":    amt,
@@ -241,7 +242,9 @@ class ItemEntryDialog(QDialog):
         self.qty.valueChanged.connect(self._calc)
 
         self.unit_cb = SearchableComboBox()
-        self.unit_cb.addItems(units)
+        self.unit_cb.addItem("Select Unit", None)
+        for u in units:
+            self.unit_cb.addItem(u["name"], str(u["_id"]))
 
         def _create_unit_dlg():
             from PySide6.QtWidgets import QInputDialog
@@ -274,8 +277,10 @@ class ItemEntryDialog(QDialog):
         self.scheme.setRange(0, 9999999); self.scheme.setDecimals(2); self.scheme.setPrefix("₹ ")
         self.scheme.valueChanged.connect(self._calc)
 
-        self.amount_lbl = QLabel("₹ 0.00")
-        self.amount_lbl.setStyleSheet("font-weight:bold;color:#1565C0;font-size:13px;")
+        self.amount_spin = QDoubleSpinBox()
+        self.amount_spin.setRange(0, 99999999); self.amount_spin.setDecimals(2); self.amount_spin.setPrefix("₹ ")
+        self.amount_spin.setStyleSheet("font-weight:bold;color:#1565C0;background:#e3f2fd;")
+        self.amount_spin.valueChanged.connect(self._on_amount_changed)
 
         form.addRow("Item *:", self.item_cb)
         form.addRow("Qty *:", self.qty)
@@ -284,10 +289,10 @@ class ItemEntryDialog(QDialog):
         form.addRow("Discount %:", self.discount)
         form.addRow("Scheme (₹):", self.scheme)
         # form.addRow("GST %:", self.gst_spin) # Hidden
-        form.addRow("Taxable Amount:", self.amount_lbl)
+        form.addRow("Taxable Amount:", self.amount_spin)
 
         setup_enter_nav(self, [
-            self.item_cb, self.qty, self.unit_cb, self.rate, self.discount, self.scheme
+            self.item_cb, self.qty, self.unit_cb, self.rate, self.discount, self.scheme, self.amount_spin
         ], accept_callback=self._accept)
 
         btns = QDialogButtonBox(
@@ -317,14 +322,37 @@ class ItemEntryDialog(QDialog):
                 self.gst_spin.setValue(item.get("gst_rate", 0))
                 # Auto-fill from item master
                 self.rate.setValue(item.get("price", 0.0))
-                self.unit_cb.setCurrentText(item.get("unit", "PCS"))
+                self.unit_cb.setCurrentData(str(item.get("unit", "")))
         self._calc()
 
     def _calc(self):
-        base = self.qty.value() * self.rate.value()
-        disc = base * self.discount.value() / 100.0
-        amt = base - disc - self.scheme.value()
-        self.amount_lbl.setText(format_inr(max(0, amt)))
+        if hasattr(self, "_calculating") and self._calculating: return
+        self._calculating = True
+        try:
+            base = self.qty.value() * self.rate.value()
+            disc = base * self.discount.value() / 100.0
+            amt = base - disc - self.scheme.value()
+            self.amount_spin.setValue(max(0, amt))
+        finally:
+            self._calculating = False
+
+    def _on_amount_changed(self):
+        if hasattr(self, "_calculating") and self._calculating: return
+        self._calculating = True
+        try:
+            # Reverse calculation: Rate = (Amount + Scheme) / (Qty * (1 - Discount/100))
+            amt = self.amount_spin.value()
+            qty = self.qty.value()
+            disc_p = self.discount.value()
+            scheme = self.scheme.value()
+            
+            if qty > 0:
+                multiplier = (1 - disc_p / 100.0)
+                if multiplier > 0:
+                    new_rate = (amt + scheme) / (qty * multiplier)
+                    self.rate.setValue(new_rate)
+        finally:
+            self._calculating = False
 
     def _accept(self):
         if self.item_cb.currentIndex() <= 0:
@@ -360,7 +388,7 @@ class ItemEntryDialog(QDialog):
             "item_id":   item["_id"],
             "item_name": item["name"],
             "hsn_sac":   item.get("hsn_sac", ""),
-            "unit":      self.unit_cb.currentText(),
+            "unit":      self.unit_cb.currentData(),
             "qty":       qty,
             "rate":      rate,
             "discount":  disc_p,
@@ -391,6 +419,7 @@ class InvoiceVoucherDialog(QDialog):
         _inch_px = max(60, int(dpi))   # 1 inch in pixels; floor at 60 for tiny screens
 
         self.setMinimumSize(880, 540 + 2 * _inch_px)   # base height + 2 × 1 inch
+        self.showMaximized()
 
         try:
             self._ledgers = api.list_ledgers()
@@ -399,12 +428,18 @@ class InvoiceVoucherDialog(QDialog):
             _groups       = api.list_groups()
         except Exception:
             self._ledgers = []; self._items = []; self._units = ["PCS"]; _groups = []
-        self._group_nature = {g["_id"]: g["nature"] for g in _groups}
+        
+        self._group_map = {str(g["_id"]): g["name"] for g in _groups}
+        self._group_nature = {str(g["_id"]): g["nature"] for g in _groups}
+        self._dt_group_id = next((str(g["_id"]) for g in _groups if g["name"] == "Duties & Taxes"), None)
+        self._unit_map = {str(u["_id"]): u["name"] for u in self._units}
+        
         # Which groups are Duties & Taxes (or a direct child of it)
         self._is_dt_group  = {
-            g["_id"]: (
+            str(g["_id"]): (
                 g["name"] == "Duties & Taxes"
                 or (g.get("parent") or "") == "Duties & Taxes"
+                or str(g.get("parent", "")) == self._dt_group_id
             )
             for g in _groups
         }
@@ -451,14 +486,51 @@ QToolButton#qt_calendar_nextmonth {
 
         self.party_cb = SearchableComboBox(); self.party_cb.setMinimumWidth(280)
         self.party_cb.addItem(f"Select {party_label}", None)
-        for l in self._ledgers: self.party_cb.addItem(l["name"], l["_id"])
+        
+        # Populate party_cb with filtered ledgers
+        for l in self._ledgers:
+            g_id = str(l.get("group", ""))
+            g_name = self._group_map.get(g_id, "")
+            
+            show = False
+            if vtype == "Sales":
+                if g_name in ["Sundry Debtors", "Cash-in-Hand", "Bank Accounts"]: show = True
+            elif vtype == "Purchase":
+                if g_name in ["Sundry Creditors", "Cash-in-Hand", "Bank Accounts"]: show = True
+            elif vtype == "Credit Note":
+                if g_name == "Sundry Debtors": show = True
+            elif vtype == "Debit Note":
+                if g_name == "Sundry Creditors": show = True
+            else:
+                show = True # fallback
+            
+            if show:
+                self.party_cb.addItem(l["name"], l["_id"])
+
         self.party_cb.currentIndexChanged.connect(lambda i: self._show_bal(i, self.party_bal))
         grid.addWidget(self.party_cb, 0, 1)
         self.party_bal = QLabel(""); self.party_bal.setStyleSheet("color:#1565C0;font-style:italic;font-size:11px;")
         grid.addWidget(self.party_bal, 0, 2)
+
         self.ledger_cb = SearchableComboBox(); self.ledger_cb.setMinimumWidth(280)
         self.ledger_cb.addItem(f"Select {ledger_label}", None)
-        for l in self._ledgers: self.ledger_cb.addItem(l["name"], l["_id"])
+
+        # Populate ledger_cb with filtered ledgers (Sales Accounts / Purchase Accounts)
+        for l in self._ledgers:
+            g_id = str(l.get("group", ""))
+            g_name = self._group_map.get(g_id, "")
+            
+            show = False
+            if vtype in ["Sales", "Credit Note"]:
+                if g_name == "Sales Accounts": show = True
+            elif vtype in ["Purchase", "Debit Note"]:
+                if g_name == "Purchase Accounts": show = True
+            else:
+                show = True
+            
+            if show:
+                self.ledger_cb.addItem(l["name"], l["_id"])
+
         self.ledger_cb.currentIndexChanged.connect(lambda i: self._show_bal(i, self.ledger_bal))
         grid.addWidget(self.ledger_cb, 1, 1)
         self.ledger_bal = QLabel(""); self.ledger_bal.setStyleSheet("color:#0277BD;font-style:italic;font-size:11px;")
@@ -535,18 +607,24 @@ QToolButton#qt_calendar_nextmonth {
             ["Item", "Qty", "Unit", "Rate (₹)", "Disc %", "Scheme (₹)", "CGST (₹)", "SGST (₹)", "IGST (₹)", "Taxable (₹)", ""])
         self.items_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch)
+        self.items_table.verticalHeader().setVisible(False)
+        self.items_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.items_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.items_table.itemDoubleClicked.connect(self._edit_item_row)
+        root.addWidget(self.items_table)
+        
+        # Quantity Total Label
+        self.qty_total_lbl = QLabel("Total Qty: 0")
+        self.qty_total_lbl.setStyleSheet("font-weight:bold;color:#1565C0;font-size:12px;margin-bottom:4px;")
+        root.addWidget(self.qty_total_lbl)
+
         for _c in range(1, 10):
             self.items_table.horizontalHeader().setSectionResizeMode(
                 _c, QHeaderView.ResizeMode.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(10, QHeaderView.ResizeMode.Fixed)
         self.items_table.setColumnWidth(10, 40)
         self.items_table.setMinimumHeight(160)
-        # No MaximumHeight cap — let the table grow as the dialog is resized
         self.items_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.items_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.items_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.items_table.doubleClicked.connect(self._edit_item_row)
-        root.addWidget(self.items_table, 1)  # stretch factor 1 — equal height with tax section
         # ── Tax / Adjustment Ledgers (dynamic) ────────────────────────────────
         tax_hdr_lay = QHBoxLayout()
         tax_title = QLabel("Tax / Adjustment Ledgers")
@@ -663,16 +741,10 @@ QToolButton#qt_calendar_nextmonth {
             ledger_entry = next((e for e in items if e["dr_cr"] == "Dr"), None)
             party_entry  = next((e for e in items if e["dr_cr"] == "Cr" and e != ledger_entry), None)
 
-        def _set_combo(cb, ledger_id):
-            # Index 0 is the "Select..." placeholder
-            for i, l in enumerate(self._ledgers):
-                if str(l["_id"]) == str(ledger_id):
-                    cb.setCurrentIndex(i + 1)
-                    return
         if party_entry:
-            _set_combo(self.party_cb, party_entry["ledger_id"])
+            self.party_cb.setCurrentData(party_entry["ledger_id"])
         if ledger_entry:
-            _set_combo(self.ledger_cb, ledger_entry["ledger_id"])
+            self.ledger_cb.setCurrentData(ledger_entry["ledger_id"])
 
         # Invoice items from stock transactions
         inv_items = existing.get("invoice_items", [])
@@ -721,20 +793,24 @@ QToolButton#qt_calendar_nextmonth {
                         hasattr(cb, 'itemData') and str(cb.itemData(i)) == str(e["ledger_id"])):
                     cb.setCurrentIndex(i)
                     break
-            row["amt_spin"].setValue(e["amount"])
+            # Set amount (flip to negative if dr_cr doesn't match base)
+            val = e["amount"]
+            if l:
+                base_dr_cr = self._dr_cr_for_ledger(l)
+                if e["dr_cr"] != base_dr_cr:
+                    val = -val
+            row["amt_spin"].setValue(val)
 
         self._refresh_totals()
 
     def _dr_cr_for_ledger(self, ledger_dict):
-        """Return 'Cr' or 'Dr' based on ledger nature and voucher context."""
-        group_id = str(ledger_dict.get("group", ""))
-        
-        # Taxes follow the voucher type direction
-        if getattr(self, "_is_dt_group", {}).get(group_id, False):
-            return "Cr" if self.vtype in ["Sales", "Debit Note"] else "Dr"
-            
-        nature = self._group_nature.get(group_id, "")
-        return "Cr" if nature in ("Liability", "Income") else "Dr"
+        """
+        Return the 'base' direction for the adjustment/tax section.
+        In Sales/Debit Note, 'Cr' entries add to the Grand Total.
+        In Purchase/Credit Note, 'Dr' entries add to the Grand Total.
+        By using this as a base, a positive input will always ADD and a negative input will always SUBTRACT.
+        """
+        return "Cr" if self.vtype in ["Sales", "Debit Note"] else "Dr"
 
     def _add_tax_row(self, placeholder="-- Select Ledger --", auto_fill=False):
         row_w = QFrame()
@@ -819,7 +895,7 @@ QToolButton#qt_calendar_nextmonth {
         wire_edit_selected(ledger_cb, _edit_tax_ledger)
 
         amt_spin = QDoubleSpinBox()
-        amt_spin.setRange(0, 9999999)
+        amt_spin.setRange(-9999999, 9999999)
         amt_spin.setDecimals(2)
         amt_spin.setFixedWidth(120)
         amt_spin.setPrefix("₹ ")
@@ -926,7 +1002,7 @@ QToolButton#qt_calendar_nextmonth {
         self._tax_rows.append(row_dict)
 
         # Wire Enter navigation within the row (and across rows)
-        self._wire_tax_row_nav()
+        self._rewire_nav()
 
         # Only refresh if NOT called from within _refresh_totals itself
         if not auto_fill and hasattr(self, "subtotal_lbl"):
@@ -936,88 +1012,21 @@ QToolButton#qt_calendar_nextmonth {
         QTimer.singleShot(50, lambda: self._tax_scroll.verticalScrollBar().setValue(
             self._tax_scroll.verticalScrollBar().maximum()
         ))
-
-
-    # ── Tax Row Enter-key navigation ──────────────────────────────────────────
-    def _wire_tax_row_nav(self):
-        """
-        (Re)wire Enter navigation across all tax rows.
-
-        Within a row the order is:  ledger_cb → rate_spin (when visible) → amt_spin
-        From the LAST widget of row N, Enter moves to ledger_cb of row N+1.
-        From the last row's last widget, Enter is a no-op (focus stays).
-
-        We store filters on the dialog so they are not GC'd.
-        """
-        if not hasattr(self, "_tax_nav_filters"):
-            self._tax_nav_filters = []
-
-        # Remove old filters (they may reference stale rows)
-        for w, f in self._tax_nav_filters:
-            try:
-                w.removeEventFilter(f)
-            except Exception:
-                pass
-        self._tax_nav_filters.clear()
-
-        rows = self._tax_rows
-        for row_idx, row in enumerate(rows):
-            # Build the intra-row widget sequence (skip hidden rate_spin)
-            intra = [row["ledger_cb"]]
-            # rate_spin is only visible for D&T ledgers – check dynamically at nav time
-            intra.append(row["rate_spin"])
-            intra.append(row["amt_spin"])
-
-            # Determine the "next target" = first widget of next row (or None)
-            next_row = rows[row_idx + 1] if row_idx + 1 < len(rows) else None
-
-            for w_idx, w in enumerate(intra):
-                # Next widget within the same row (skip invisible ones at nav time)
-                is_last_in_row = (w_idx == len(intra) - 1)
-
-                class _TaxNavFilter(QObject):  # noqa: N801
-                    def __init__(self_, _w_idx, _intra, _is_last, _next_row_ref):
-                        super().__init__()
-                        self_._w_idx = _w_idx
-                        self_._intra = _intra
-                        self_._is_last = _is_last
-                        self_._next_row_ref = _next_row_ref
-
-                    def eventFilter(self_, obj, event):
-                        if event.type() != QEvent.Type.KeyPress:
-                            return False
-                        if event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                            return False
-                        # Skip if this widget's searchable popup is open
-                        if hasattr(obj, "_popup") and obj._popup and obj._popup.isVisible():
-                            return False
-                        if not self_._is_last:
-                            # Move to next visible widget in this row
-                            for nxt in self_._intra[self_._w_idx + 1:]:
-                                if nxt.isVisible() and nxt.isEnabled():
-                                    nxt.setFocus()
-                                    if hasattr(nxt, "selectAll"):
-                                        nxt.selectAll()
-                                    return True
-                        # Move to first widget of next row
-                        if self_._next_row_ref:
-                            target = self_._next_row_ref["ledger_cb"]
-                            target.setFocus()
-                            QTimer.singleShot(0, target.showPopup)
-                            return True
-                        return False
-
-                f = _TaxNavFilter(w_idx, intra, is_last_in_row, next_row)
-                w.installEventFilter(f)
-                self._tax_nav_filters.append((w, f))
-
     def _remove_tax_row(self, row_dict):
-        self._tax_v_lay.removeWidget(row_dict["widget"])
-        row_dict["widget"].deleteLater()
         if row_dict in self._tax_rows:
             self._tax_rows.remove(row_dict)
-        self._wire_tax_row_nav()   # rebuild nav after removal
-        self._refresh_totals()
+            row_dict["widget"].deleteLater()
+            self._refresh_totals()
+            self._rewire_nav()
+
+    def _rewire_nav(self):
+        widgets = [self.date_edit, self.party_cb, self.ledger_cb]
+        for row in self._tax_rows:
+            widgets.append(row["ledger_cb"])
+            widgets.append(row["rate_spin"])
+            widgets.append(row["amt_spin"])
+        widgets.append(self.narration)
+        setup_enter_nav(self, widgets)
 
 
     def _add_ledger_row_and_focus(self):
@@ -1071,7 +1080,8 @@ QToolButton#qt_calendar_nextmonth {
             self.items_table.insertRow(r)
             self.items_table.setItem(r, 0, QTableWidgetItem(d["item_name"]))
             self.items_table.setItem(r, 1, QTableWidgetItem(f"{d['qty']:g}"))
-            self.items_table.setItem(r, 2, QTableWidgetItem(d["unit"]))
+            u_name = self._unit_map.get(d["unit"], d["unit"])
+            self.items_table.setItem(r, 2, QTableWidgetItem(u_name))
             self.items_table.setItem(r, 3, QTableWidgetItem(format_indian_number(d['rate'])))
             self.items_table.setItem(r, 4, QTableWidgetItem(f"{d.get('discount', 0):g}%"))
             self.items_table.setItem(r, 5, QTableWidgetItem(format_indian_number(d.get('scheme', 0))))
@@ -1089,6 +1099,10 @@ QToolButton#qt_calendar_nextmonth {
             del_btn.setStyleSheet("QPushButton { border:none; background:transparent; } QPushButton:hover { background:#fee2e2; border-radius:4px; }")
             del_btn.clicked.connect(lambda *a, idx=i: self._remove_item(idx))
             self.items_table.setCellWidget(r, 10, del_btn)
+        
+        # Update Total Qty
+        t_qty = sum(d["qty"] for d in self._invoice_items)
+        self.qty_total_lbl.setText(f"Total Qty: {t_qty:g}")
 
     def _on_party_changed(self, idx):
         if idx >= 0:
@@ -1177,14 +1191,36 @@ QToolButton#qt_calendar_nextmonth {
         prefix = "Sales" if self.vtype in ["Sales", "Credit Note"] else "Purchase"
         
         for (ttype, trate), tamount in tax_summary.items():
-            if is_intra and ttype in ("CGST", "SGST"):
+            if (is_intra and ttype in ("CGST", "SGST")) or (not is_intra and ttype == "IGST"):
                 lname = f"{prefix} {ttype}@{trate:g}%"
                 l = self._find_ledger_by_name(lname)
-                if l: needed_ledgers.append((l, round(tamount, 2)))
-            elif not is_intra and ttype == "IGST":
-                lname = f"{prefix} {ttype}@{trate:g}%"
-                l = self._find_ledger_by_name(lname)
-                if l: needed_ledgers.append((l, round(tamount, 2)))
+                
+                if not l:
+                    # Auto-create tax ledger if missing
+                    if self._dt_group_id:
+                        try:
+                            # Determine type (Cr for Sales/Debit Note, Dr for Purchase/Credit Note)
+                            l_type = "Cr" if self.vtype in ["Sales", "Debit Note"] else "Dr"
+                            resp = api.create_ledger({
+                                "name": lname,
+                                "group": self._dt_group_id,
+                                "tax_rate": trate,
+                                "opening_balance": 0,
+                                "type": l_type
+                            })
+                            l = {
+                                "_id": resp.get("id", ""),
+                                "name": lname,
+                                "group": self._dt_group_id,
+                                "tax_rate": trate
+                            }
+                            self._ledgers.append(l)
+                            self._is_dt_group[str(l["_id"])] = True
+                        except Exception as e:
+                            print(f"Error auto-creating tax ledger {lname}: {e}")
+                
+                if l:
+                    needed_ledgers.append((l, round(tamount, 2)))
 
         # Sync _tax_rows with needed_ledgers
         # First, remove existing auto-fill tax rows that are NOT in needed_ledgers
@@ -1265,11 +1301,28 @@ QToolButton#qt_calendar_nextmonth {
         self.grand_lbl.setText(f"Grand Total: {format_inr(grand)}")
 
     def _show_bal(self, idx, label):
-        if idx < 0 or idx >= len(self._ledgers): return
-        try:
-            bal = api.ledger_balance(self._ledgers[idx]["_id"])
-            label.setText(f"Bal: {format_indian_number(bal['balance'])} {bal['type']}")
-        except Exception: pass
+        if idx <= 0:
+            label.setText("")
+            return
+        
+        # Get data from the combo itself instead of assuming index matches self._ledgers
+        cb = self.sender() if isinstance(self.sender(), SearchableComboBox) else None
+        if not cb:
+            # Fallback if called directly (e.g. from lambda)
+            # Find which label it is to guess the combo
+            if label == self.party_bal: cb = self.party_cb
+            elif label == self.ledger_bal: cb = self.ledger_cb
+        
+        if cb:
+            l_id = cb.itemData(idx)
+            if l_id:
+                try:
+                    bal = api.ledger_balance(l_id)
+                    label.setText(f"Bal: {format_indian_number(bal['balance'])} {bal['type']}")
+                except Exception:
+                    label.setText("")
+            else:
+                label.setText("")
 
     def _on_accept(self):
         items = self._invoice_items
@@ -1340,11 +1393,19 @@ QToolButton#qt_calendar_nextmonth {
             l = next((x for x in self._ledgers if x["_id"] == l_id), None)
             if not l:
                 continue
+            base_dr_cr = self._dr_cr_for_ledger(l)
+            final_dr_cr = base_dr_cr
+            final_amt = amt
+            if amt < 0:
+                # Flip Dr/Cr if amount is negative
+                final_dr_cr = "Cr" if base_dr_cr == "Dr" else "Dr"
+                final_amt = abs(amt)
+
             entries.append({
                 "ledger_id":   l["_id"],
                 "ledger_name": l["name"],
-                "dr_cr":       self._dr_cr_for_ledger(l),
-                "amount":      amt,
+                "dr_cr":       final_dr_cr,
+                "amount":      final_amt,
             })
 
         return {
@@ -1353,5 +1414,4 @@ QToolButton#qt_calendar_nextmonth {
             "entries": entries, "invoice_items": items,
             "subtotal": subtotal, "cgst": cgst, "sgst": sgst, "grand_total": grand,
         }
-
 

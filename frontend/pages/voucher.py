@@ -15,7 +15,7 @@ INVOICE_TYPES = {"Sales", "Purchase", "Credit Note", "Debit Note"}
 JOURNAL_TYPES = {"Payment", "Receipt", "Journal", "Contra"}
 
 from frontend.pages.invoice_voucher import InvoiceVoucherDialog
-from frontend.pages.credit_note import CreditNoteDialog
+# from frontend.pages.credit_note import CreditNoteDialog
 
 
 
@@ -690,13 +690,20 @@ class VoucherPage(QWidget):
     def _open_voucher(self, vtype):
         for v, b in self._vtype_btns.items(): b.setChecked(v == vtype)
         if vtype == "Credit Note":
-            dlg = CreditNoteDialog(self)
+            self.window().open_credit_note()
+            for b in self._vtype_btns.values(): b.setChecked(False)
+            return
+        elif vtype == "Debit Note":
+            self.window().open_debit_note()
+            for b in self._vtype_btns.values(): b.setChecked(False)
+            return
         elif vtype in INVOICE_TYPES:
             dlg = InvoiceVoucherDialog(self, vtype)
         elif vtype in ["Payment", "Receipt"]:
             dlg = PaymentReceiptDialog(self, vtype)
         else:
             dlg = JournalVoucherDialog(self, vtype)
+        
         if dlg.exec():
             data = dlg.get_data(); entries = data.get("entries", [])
             if not entries: QMessageBox.warning(self, "Error", "No entries."); return
@@ -758,7 +765,15 @@ class VoucherPage(QWidget):
                 voucher["invoice_items"] = api.get_voucher_stock_txns(vid)
             except Exception:
                 pass
-            dlg = CreditNoteDialog(self, existing=voucher)
+            self.window().open_credit_note(voucher)
+            return
+        elif vtype == "Debit Note":
+            try:
+                voucher["invoice_items"] = api.get_voucher_stock_txns(vid)
+            except Exception:
+                pass
+            self.window().open_debit_note(voucher)
+            return
         elif vtype in INVOICE_TYPES:
             try:
                 voucher["invoice_items"] = api.get_voucher_stock_txns(vid)
