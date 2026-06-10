@@ -333,6 +333,7 @@ class StockSummaryTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSortingEnabled(True)
         layout.addWidget(self.table)
         self.total_lbl = QLabel("Grand Total: ₹ 0.00")
         self.total_lbl.setStyleSheet("font-size:14px;font-weight:bold;color:#1565C0;text-align:right;")
@@ -344,6 +345,7 @@ class StockSummaryTab(QWidget):
         self._load(); super().showEvent(e)
 
     def _load(self):
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         try:
             resp = api.stock_summary()
@@ -366,6 +368,7 @@ class StockSummaryTab(QWidget):
             self.table.setItem(row, 2, qty_item)
             self.table.setItem(row, 3, rate_item)
             self.table.setItem(row, 4, val_item)
+        self.table.setSortingEnabled(True)
         self.total_lbl.setText(f"Grand Total: {format_inr(grand_total)}")
 
 
@@ -406,6 +409,7 @@ class StockItemsTab(QWidget):
         self.table.horizontalHeader().resizeSection(6, 100)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSortingEnabled(True)
         self.table.verticalHeader().setDefaultSectionSize(48)
         layout.addWidget(self.table)
         self._load()
@@ -414,6 +418,7 @@ class StockItemsTab(QWidget):
         self._load(); super().showEvent(e)
 
     def _load(self):
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         try:
             items = api.list_stock_items()
@@ -445,20 +450,30 @@ class StockItemsTab(QWidget):
             cell_lay.addWidget(del_btn)
             cell_lay.addStretch()
             self.table.setCellWidget(row, 6, cell)
+        self.table.setSortingEnabled(True)
 
     def _add(self):
+        if not session.has_permission("item", "edit"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create Stock Items.")
+            return
         dlg = StockItemDialog(self)
         if dlg.exec():
             try: api.create_stock_item(dlg.get_data()); self._load()
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
 
     def _edit(self, item):
+        if not session.has_permission("item", "update"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to edit Stock Items.")
+            return
         dlg = StockItemDialog(self, item)
         if dlg.exec():
             try: api.update_stock_item(item["_id"], dlg.get_data()); self._load()
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
 
     def _delete(self, iid):
+        if not session.has_permission("item", "delete"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to delete Stock Items.")
+            return
         if QMessageBox.question(self, "Confirm", "Delete this stock item?") == QMessageBox.StandardButton.Yes:
             try: api.delete_stock_item(iid); self._load()
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
@@ -498,6 +513,7 @@ class StockCategoriesTab(QWidget):
         self.table.horizontalHeader().resizeSection(4, 100)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSortingEnabled(True)
         layout.addWidget(self.table)
         self._load()
 
@@ -505,6 +521,7 @@ class StockCategoriesTab(QWidget):
         self._load(); super().showEvent(e)
 
     def _load(self):
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         try:
             cats = api.list_stock_categories()
@@ -529,8 +546,12 @@ class StockCategoriesTab(QWidget):
             del_btn.clicked.connect(lambda *a, cid=c["_id"]: self._delete(cid))
             cell_lay.addWidget(edit_btn); cell_lay.addWidget(del_btn); cell_lay.addStretch()
             self.table.setCellWidget(row, 4, cell)
+        self.table.setSortingEnabled(True)
 
     def _add(self):
+        if not session.has_permission("item", "edit"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create Stock Categories.")
+            return
         dlg = StockCategoryDialog(self)
         if dlg.exec():
             try:
@@ -540,6 +561,9 @@ class StockCategoriesTab(QWidget):
                 QMessageBox.warning(self, "Error", str(ex))
 
     def _edit(self, category):
+        if not session.has_permission("item", "update"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to edit Stock Categories.")
+            return
         dlg = StockCategoryDialog(self, category)
         if dlg.exec():
             try:
@@ -549,6 +573,9 @@ class StockCategoriesTab(QWidget):
                 QMessageBox.warning(self, "Error", str(ex))
 
     def _delete(self, cid):
+        if not session.has_permission("item", "delete"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to delete Stock Categories.")
+            return
         if QMessageBox.question(self, "Confirm", "Delete this stock category?") == QMessageBox.StandardButton.Yes:
             try:
                 api.delete_stock_category(cid)

@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from backend.models.voucher import (
     create_voucher, get_voucher, list_vouchers, delete_voucher, update_voucher, VOUCHER_TYPES
 )
+from backend.routes.auth_routes import check_permission_backend
 
 voucher_bp = Blueprint("voucher", __name__, url_prefix="/api/vouchers")
 
@@ -17,7 +18,19 @@ def list_all():
     from_date = request.args.get("from")
     to_date = request.args.get("to")
     company_id = request.args.get("company_id")
-    return jsonify(list_vouchers(vtype, from_date, to_date, company_id=company_id))
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 50))
+    
+    if vtype:
+        if not check_permission_backend(vtype, 'view'):
+            return jsonify({"error": "Forbidden"}), 403
+        return jsonify(list_vouchers(vtype, from_date, to_date, company_id=company_id, page=page, limit=limit))
+    else:
+        # Check permissions for all voucher types and filter
+        allowed_types = [vt for vt in VOUCHER_TYPES if check_permission_backend(vt, 'view')]
+        if not allowed_types:
+            return jsonify({"data": [], "total": 0, "page": page, "limit": limit})
+        return jsonify(list_vouchers(allowed_types, from_date, to_date, company_id=company_id, page=page, limit=limit))
 
 
 @voucher_bp.get("/<voucher_id>")
@@ -25,6 +38,8 @@ def get_one(voucher_id):
     doc = get_voucher(voucher_id)
     if not doc:
         return jsonify({"error": "Not found"}), 404
+    if not check_permission_backend(doc.get("voucher_type"), 'view'):
+        return jsonify({"error": "Forbidden"}), 403
     return jsonify(doc)
 
 
@@ -35,6 +50,10 @@ def add_voucher():
     for r in required:
         if not data.get(r):
             return jsonify({"error": f"{r} required"}), 400
+            
+    if not check_permission_backend(data["voucher_type"], 'edit'):
+        return jsonify({"error": "Forbidden"}), 403
+        
     try:
         linking = data.get("linking")
         ref_type = linking.get("reference_type", "") if linking else ""
@@ -71,12 +90,24 @@ def add_voucher():
 
 @voucher_bp.delete("/<voucher_id>")
 def remove_voucher(voucher_id):
+    doc = get_voucher(voucher_id)
+    if not doc:
+        return jsonify({"error": "Not found"}), 404
+    if not check_permission_backend(doc.get("voucher_type"), 'delete'):
+        return jsonify({"error": "Forbidden"}), 403
+        
     delete_voucher(voucher_id)
     return jsonify({"ok": True})
 
 
 @voucher_bp.put("/<voucher_id>")
 def edit_voucher(voucher_id):
+    doc = get_voucher(voucher_id)
+    if not doc:
+        return jsonify({"error": "Not found"}), 404
+    if not check_permission_backend(doc.get("voucher_type"), 'update'):
+        return jsonify({"error": "Forbidden"}), 403
+        
     data = request.json or {}
     try:
         update_voucher(
@@ -145,6 +176,7 @@ def voucher_stock_txns(voucher_id):
             "txn_type":  t.txn_type or "",
             "qty":       t.qty or 0.0,
             "rate":      t.rate or 0.0,
+            "final_rate": t.final_rate or 0.0,
             "discount":  t.discount or 0.0,
             "scheme":    t.scheme or 0.0,
             "amount":    t.value or 0.0,
@@ -176,6 +208,9 @@ def add_accounting_voucher():
     
     if res["status"] == "Error":
         return jsonify(res), 400
+        
+    if not check_permission_backend(res["transaction_type"], 'edit'):
+        return jsonify({"error": "Forbidden"}), 403
         
     # Create the voucher
     try:

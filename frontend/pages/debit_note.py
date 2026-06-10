@@ -308,7 +308,8 @@ class DebitNoteDialog(QDialog):
             except:
                 self._company_state = ""
 
-            invoices = api.list_vouchers(type="Purchase", company_id=session.company_id)
+            res = api.list_vouchers(type="Purchase", company_id=session.company_id, limit=0)
+            invoices = res.get("data", [])
             for inv in invoices:
                 label = f"[{inv['date']}] {inv.get('voucher_no', 'N/A')} - {inv.get('party_name', 'N/A')} (₹{format_indian_number(inv.get('amount', 0))})"
                 self.invoice_cb.addItem(label, inv)

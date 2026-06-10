@@ -5,19 +5,33 @@ from dotenv import load_dotenv
 load_dotenv()
 BASE_URL = f"http://127.0.0.1:{os.getenv('FLASK_PORT', 5050)}/api"
 
+def set_server_address(ip, port=None):
+    global BASE_URL
+    if port is None:
+        port = os.getenv('FLASK_PORT', 5050)
+    BASE_URL = f"http://{ip}:{port}/api"
+
 
 def _cid():
     """Return current company_id from session, or None."""
     try:
         from frontend import session
-        return session.company_id or None
+        return session.get("company_id")
+    except Exception:
+        return None
+
+def _token():
+    """Return current session token."""
+    try:
+        from frontend import session
+        return session.get("token")
     except Exception:
         return None
 
 
 def _company_params(path, params=None):
     params = dict(params or {})
-    if path.startswith("/companies") or path == "/health" or "company_id" in params:
+    if path.startswith("/company") or path.startswith("/auth") or path == "/health" or "company_id" in params:
         return params or None
     c = _cid()
     if c:
@@ -27,7 +41,7 @@ def _company_params(path, params=None):
 
 def _with_company_id(path, data=None):
     data = dict(data or {})
-    if path.startswith("/companies") or "company_id" in data:
+    if path.startswith("/company") or path.startswith("/auth") or "company_id" in data:
         return data
     c = _cid()
     if c:
@@ -35,36 +49,60 @@ def _with_company_id(path, data=None):
     return data
 
 
+def _headers():
+    token = _token()
+    if token:
+        return {"Authorization": token}
+    return {}
+
+
 def _get(path, params=None):
-    r = requests.get(BASE_URL + path, params=_company_params(path, params), timeout=10)
+    r = requests.get(BASE_URL + path, params=_company_params(path, params), headers=_headers(), timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def _post(path, data):
-    r = requests.post(BASE_URL + path, params=_company_params(path), json=_with_company_id(path, data), timeout=10)
-    r.raise_for_status()
+    r = requests.post(BASE_URL + path, params=_company_params(path), json=_with_company_id(path, data), headers=_headers(), timeout=10)
+    if r.status_code >= 400:
+        try:
+            err = r.json().get("error", r.text)
+            raise Exception(f"{r.status_code} Error: {err}")
+        except:
+            r.raise_for_status()
     return r.json()
 
 
 def _put(path, data):
-    r = requests.put(BASE_URL + path, params=_company_params(path), json=_with_company_id(path, data), timeout=10)
+    r = requests.put(BASE_URL + path, params=_company_params(path), json=_with_company_id(path, data), headers=_headers(), timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def _delete(path):
-    r = requests.delete(BASE_URL + path, params=_company_params(path), timeout=10)
+    r = requests.delete(BASE_URL + path, params=_company_params(path), headers=_headers(), timeout=10)
     r.raise_for_status()
     return r.json()
 
 
+# Auth
+def login(username, password): 
+    return _post("/auth/login", {"username": username, "password": password})
+def validate_session():       
+    return _post("/auth/validate_session", {})
+def logout():                 
+    return _post("/auth/logout", {})
+def get_my_companies():       
+    return _get("/auth/my_companies")
+def get_permissions(cid=None): 
+    return _get("/auth/permissions", params={"company_id": cid} if cid else {})
+
 # Companies
-def list_companies():         return _get("/companies/")
-def get_company(cid):         return _get(f"/companies/{cid}")
-def create_company(data):     return _post("/companies/", data)
-def update_company(cid, d):   return _put(f"/companies/{cid}", d)
-def delete_company(cid):      return _delete(f"/companies/{cid}")
+def list_companies():         return _get("/company/")
+def get_company(cid):         return _get(f"/company/{cid}")
+def create_company(data):     return _post("/company/", data)
+def update_company(cid, d):   return _put(f"/company/{cid}", d)
+def delete_company(cid):      return _delete(f"/company/{cid}")
 
 # Groups  (global — not company-scoped)
 def list_groups():            return _get("/groups/")
@@ -177,6 +215,29 @@ def stock_summary(**kw):
 
 
 # Settings (Backup/Restore)
+def list_users():
+    return _get('/auth/users')
+
+def create_user(data):
+    return _post('/auth/users', data)
+
+def list_roles():
+    return _get('/auth/roles')
+
+def list_all_companies():
+    return _get('/auth/companies/all')
+
+def create_mapping(data):
+    return _post('/auth/mappings', data)
+def list_mappings(company_id=None, user_id=None):
+    p = {}
+    if company_id: p['company_id'] = company_id
+    if user_id: p['user_id'] = user_id
+    return _get('/auth/mappings', params=p)
+
+def delete_mapping(mid):
+    return _delete(f'/auth/mappings/{mid}')
+
 def backup_company(company_id):
     params = {"company_id": company_id}
     r = requests.get(BASE_URL + "/settings/backup", params=params, timeout=30)
@@ -191,3 +252,35 @@ def restore_company(company_id, file_path):
         r = requests.post(BASE_URL + "/settings/restore", params=params, files=files, timeout=30)
     r.raise_for_status()
     return r.json()
+
+# GST Reports
+def gstr1(from_date=None, to_date=None):
+    p = {}
+    if from_date: p["from"] = from_date
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/gstr1", params=p)
+
+def gstr3b(from_date=None, to_date=None):
+    p = {}
+    if from_date: p["from"] = from_date
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/gstr3b", params=p)
+
+def gst_summary(from_date=None, to_date=None):
+    p = {}
+    if from_date: p["from"] = from_date
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/gst-summary", params=p)
+
+def save_role_permissions(data):
+    return _post('/auth/roles/permissions', data)
+
+def get_role_permissions(role_id):
+    return _get(f'/auth/roles/{role_id}/permissions')
+

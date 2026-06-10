@@ -69,6 +69,7 @@ class StockTransaction(Document):
     txn_type    = StringField() # IN or OUT
     qty         = FloatField()
     rate        = FloatField()
+    final_rate  = FloatField(default=0.0)
     discount    = FloatField(default=0.0)
     scheme      = FloatField(default=0.0)
     value       = FloatField()
@@ -364,7 +365,8 @@ def get_stock_balance(item_id: str = None, company_id: str = None) -> list:
 def add_stock_transaction(item_id: str, item_name: str, txn_type: str,
                            qty: float, rate: float, value: float,
                            voucher_id: str, date: str, company_id: str = None,
-                           discount: float = 0.0, scheme: float = 0.0):
+                           discount: float = 0.0, scheme: float = 0.0,
+                           final_rate: float = 0.0):
     """txn_type: IN or OUT"""
     StockTransaction(
         item_id=ObjectId(item_id),
@@ -372,6 +374,7 @@ def add_stock_transaction(item_id: str, item_name: str, txn_type: str,
         txn_type=txn_type,
         qty=qty,
         rate=rate,
+        final_rate=final_rate,
         discount=discount,
         scheme=scheme,
         value=value,

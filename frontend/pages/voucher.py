@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, QDate, QSize, Signal, QTimer, QEvent
 import frontend.api_client as api
 from frontend.utils import setup_enter_nav, SearchableComboBox, wire_create_new, wire_edit_selected, DateEdit, get_icon, format_indian_number, format_inr
 import frontend.session as session
+from frontend.utils.excel_export import export_sales_register
 
 INVOICE_TYPES = {"Sales", "Purchase", "Credit Note", "Debit Note"}
 JOURNAL_TYPES = {"Payment", "Receipt", "Journal", "Contra"}
@@ -248,13 +249,23 @@ class PaymentReceiptDialog(QDialog):
         party_title = "CUSTOMER (DEBTOR)" if vtype == "Receipt" else "SUPPLIER / EXPENSE"
         self.party_ledger = SearchableComboBox(); self.party_ledger.setMinimumHeight(42)
         self.party_ledger.addItem("-- Select Party --", None)
+        
+        # Groups that are never valid for the party side of a Payment/Receipt
+        _cb_groups = {"Cash-in-Hand", "Bank Accounts"}             # always on the cash/bank side
+        _invalid_groups = {"Sales Accounts", "Purchase Accounts"}  # blocked by AccountingEngine
+        # Note: 'Duties & Taxes' is allowed — e.g. GST Deposit is a valid Payment
+
         for l in self._ledgers:
             g_name = self._group_map.get(str(l.get("group", "")), "")
+            if g_name in _cb_groups or g_name in _invalid_groups:
+                continue  # skip cash/bank and invalid ledgers
             if vtype == "Receipt":
-                if g_name == "Sundry Debtors": self.party_ledger.addItem(l["name"], l["_id"])
-            else:
-                if g_name in ["Sundry Creditors", "Indirect Expenses", "Direct Expenses", "Expenses (Direct)", "Expenses (Indirect)"]:
+                # Receipt: show Debtors + Suspense A/c (for unclassified receipts)
+                if g_name in ["Sundry Debtors", "Suspense A/c", "Suspense Account", "Suspense"]:
                     self.party_ledger.addItem(l["name"], l["_id"])
+            else:
+                # Payment: show all valid ledgers (Creditors, Expenses, Suspense, Capital, Loans, etc.)
+                self.party_ledger.addItem(l["name"], l["_id"])
         self.party_ledger.currentIndexChanged.connect(self._on_party_changed)
         _add_section(party_title, self.party_ledger)
 
@@ -642,7 +653,34 @@ class JournalVoucherDialog(QDialog):
 
 class VoucherPage(QWidget):
     def __init__(self):
-        super().__init__(); self._build()
+        super().__init__()
+        self.current_page = 1
+        self.page_limit = 50
+        self.total_count = 0
+        self._build()
+
+    def _open_voucher(self, vtype):
+        """Open the creation dialog for a specific voucher type."""
+        if vtype == "Credit Note":
+            self.window().open_credit_note()
+            return
+        elif vtype == "Debit Note":
+            self.window().open_debit_note()
+            return
+        elif vtype in INVOICE_TYPES:
+            dlg = InvoiceVoucherDialog(self, vtype)
+        elif vtype in ["Payment", "Receipt"]:
+            dlg = PaymentReceiptDialog(self, vtype)
+        else:
+            dlg = JournalVoucherDialog(self, vtype)
+        
+        if dlg.exec():
+            data = dlg.get_data()
+            try:
+                api.create_voucher(data)
+                self._load()
+            except Exception as ex:
+                QMessageBox.warning(self, "Error", str(ex))
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -659,16 +697,57 @@ class VoucherPage(QWidget):
             btn = QPushButton(f"{vtype}\n{key}"); btn.setFixedHeight(52); btn.setCheckable(True); btn.setShortcut(key)
             btn.setStyleSheet("QPushButton{background:#fff;border:1px solid #cbd5e1;border-radius:6px;color:#1e3a5f;font-size:11px;font-weight:bold;} QPushButton:hover{background:#dbeafe;border-color:#2563eb;} QPushButton:checked{background:#2563eb;color:#fff;border-color:#2563eb;}")
             btn.clicked.connect(lambda *a, v=vtype: self._open_voucher(v))
+            if not session.has_permission(vtype, "edit"):
+                btn.setEnabled(False)
+                btn.setStyleSheet("QPushButton { background: #e2e8f0; color: #94a3b8; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 11px; font-weight: bold; }")
             self._vtype_btns[vtype] = btn; btn_lay.addWidget(btn)
         layout.addWidget(btn_bar)
         flt = QHBoxLayout(); flt.addWidget(QLabel("Filter:"))
-        self.type_filter = SearchableComboBox(); self.type_filter.addItem("All"); self.type_filter.addItems([s[0] for s in shortcuts])
-        self.type_filter.currentTextChanged.connect(self._load); flt.addWidget(self.type_filter); flt.addStretch(); layout.addLayout(flt)
+        allowed_types = [s[0] for s in shortcuts if session.has_permission(s[0], "view")]
+        self.type_filter = SearchableComboBox(); self.type_filter.addItem("All"); self.type_filter.addItems(allowed_types)
+        self.type_filter.currentTextChanged.connect(self._on_filter_changed); flt.addWidget(self.type_filter)
+        
+        self.export_btn = QPushButton("  Excel Export")
+        self.export_btn.setIcon(get_icon("frontend/assets/icons/upload.svg", "#1565C0"))
+        self.export_btn.setIconSize(QSize(16, 16))
+        self.export_btn.setStyleSheet("QPushButton { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 12px; font-weight: bold; color: #1565C0; } QPushButton:hover { background: #e3f2fd; }")
+        self.export_btn.clicked.connect(self._export_excel)
+        flt.addWidget(self.export_btn)
+        
+        flt.addStretch(); layout.addLayout(flt)
+
+        # Pagination Bar
+        self.pager_bar = QHBoxLayout()
+        self.pager_bar.setContentsMargins(0, 0, 0, 0)
+        self.prev_btn = QPushButton("Previous")
+        self.prev_btn.setFixedWidth(100)
+        self.prev_btn.clicked.connect(self._prev_page)
+        self.next_btn = QPushButton("Next")
+        self.next_btn.setFixedWidth(100)
+        self.next_btn.clicked.connect(self._next_page)
+        self.page_lbl = QLabel("Page 1")
+        self.page_lbl.setStyleSheet("font-weight: bold; color: #1e3a5f;")
+        
+        self.limit_cb = QComboBox()
+        self.limit_cb.addItems(["25", "50", "100", "200"])
+        self.limit_cb.setCurrentText(str(self.page_limit))
+        self.limit_cb.currentTextChanged.connect(self._on_limit_changed)
+        
+        self.pager_bar.addWidget(self.prev_btn)
+        self.pager_bar.addStretch()
+        self.pager_bar.addWidget(QLabel("Show:"))
+        self.pager_bar.addWidget(self.limit_cb)
+        self.pager_bar.addSpacing(10)
+        self.pager_bar.addWidget(self.page_lbl)
+        self.pager_bar.addStretch()
+        self.pager_bar.addWidget(self.next_btn)
+        layout.addLayout(self.pager_bar)
+
         self.table = QTableWidget(0, 8); self.table.setHorizontalHeaderLabels(["No.", "Type", "Date", "Narration", "Amount", "PDF", "Edit", "Del"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive); self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         for i in [0,1,2,4,5,6,7]: self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setColumnWidth(5, 40); self.table.setColumnWidth(6, 40); self.table.setColumnWidth(7, 40)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.installEventFilter(self)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setSortingEnabled(True); self.table.installEventFilter(self)
         layout.addWidget(self.table); self._load()
 
     def showEvent(self, e):
@@ -688,6 +767,11 @@ class VoucherPage(QWidget):
         v = self._vouchers[row]; self._edit_voucher(v["_id"], v.get("voucher_type", "")); return True
 
     def _open_voucher(self, vtype):
+        if not session.has_permission(vtype, "edit"):
+            QMessageBox.warning(self, "Permission Denied", f"You do not have permission to create {vtype} vouchers.")
+            for b in self._vtype_btns.values(): b.setChecked(False)
+            return
+            
         for v, b in self._vtype_btns.items(): b.setChecked(v == vtype)
         if vtype == "Credit Note":
             self.window().open_credit_note()
@@ -714,13 +798,46 @@ class VoucherPage(QWidget):
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
         for b in self._vtype_btns.values(): b.setChecked(False)
 
+    def _on_filter_changed(self, text):
+        self.current_page = 1
+        self._load()
+
+    def _on_limit_changed(self, val):
+        self.page_limit = int(val)
+        self.current_page = 1
+        self._load()
+
+    def _prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self._load()
+
+    def _next_page(self):
+        if self.current_page * self.page_limit < self.total_count:
+            self.current_page += 1
+            self._load()
+
     def _load(self):
         self.table.setRowCount(0); vtype = self.type_filter.currentText() if hasattr(self, "type_filter") else None
-        kwargs = {}; 
+        kwargs = {"page": self.current_page, "limit": self.page_limit}
         if vtype and vtype != "All": kwargs["type"] = vtype
-        try: vouchers = api.list_vouchers(**kwargs)
-        except Exception as ex: QMessageBox.warning(self, "Error", str(ex)); return
+        try:
+            result = api.list_vouchers(**kwargs)
+            vouchers = result["data"]
+            self.total_count = result["total"]
+        except Exception as ex:
+            QMessageBox.warning(self, "Error", str(ex))
+            return
+        
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
         self._vouchers = vouchers
+        
+        # Update pager UI
+        self.page_lbl.setText(f"Page {self.current_page} of {max(1, (self.total_count + self.page_limit - 1) // self.page_limit)} (Total: {self.total_count})")
+        self.prev_btn.setEnabled(self.current_page > 1)
+        self.next_btn.setEnabled(self.current_page * self.page_limit < self.total_count)
+
         for row, v in enumerate(vouchers):
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(v.get("voucher_no", "")))
@@ -738,9 +855,20 @@ class VoucherPage(QWidget):
             edit_btn.clicked.connect(lambda *a, vid=v["_id"], vt=vt: self._edit_voucher(vid, vt)); self.table.setCellWidget(row, 6, edit_btn)
             del_btn = QPushButton(); del_btn.setIcon(get_icon("frontend/assets/icons/trash.svg", "#c62828")); del_btn.setFixedWidth(34); del_btn.setStyleSheet("QPushButton { border:none; background:transparent; } QPushButton:hover { background:#fee2e2; border-radius:4px; }")
             del_btn.clicked.connect(lambda *a, vid=v["_id"]: self._delete(vid)); self.table.setCellWidget(row, 7, del_btn)
-        if self.table.rowCount() > 0: self.table.setCurrentCell(0, 0); self.table.setFocus()
+        if self.table.rowCount() > 0: self.table.setSortingEnabled(True); self.table.setCurrentCell(0, 0); self.table.setFocus()
 
     def _delete(self, vid):
+        try:
+            v = api.get_voucher(vid)
+            vtype = v.get("voucher_type")
+        except Exception as ex:
+            QMessageBox.warning(self, "Error", f"Failed to fetch voucher details: {ex}")
+            return
+            
+        if not session.has_permission(vtype, "delete"):
+            QMessageBox.warning(self, "Permission Denied", f"You do not have permission to delete {vtype} vouchers.")
+            return
+            
         if QMessageBox.question(self,"Confirm","Delete this voucher?") == QMessageBox.StandardButton.Yes:
             try: api.delete_voucher(vid); self._load()
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
@@ -758,6 +886,10 @@ class VoucherPage(QWidget):
         except Exception as ex: QMessageBox.warning(self, "Error", f"Failed to open PDF: {ex}")
 
     def _edit_voucher(self, vid, vtype):
+        if not session.has_permission(vtype, "update"):
+            QMessageBox.warning(self, "Permission Denied", f"You do not have permission to edit {vtype} vouchers.")
+            return
+            
         try: voucher = api.get_voucher(vid)
         except Exception as ex: QMessageBox.warning(self, "Error", str(ex)); return
         if vtype == "Credit Note":
@@ -793,3 +925,57 @@ class VoucherPage(QWidget):
                 if "linking" in data: update_payload["linking"] = data["linking"]
                 api.update_voucher(vid, update_payload); self._load()
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
+    def _export_excel(self):
+        vtype = self.type_filter.currentText()
+        if vtype != "Sales":
+            QMessageBox.information(self, "Export Info", "Currently, Excel export is specifically formatted for 'Sales' vouchers. Please filter by 'Sales' first.")
+            return
+            
+        if not hasattr(self, "_vouchers") or not self._vouchers:
+            QMessageBox.warning(self, "No Data", "No sales vouchers found to export.")
+            return
+
+        # Prepare data (fetch details for each voucher)
+        try:
+            # Fetch all vouchers for export (ignore pagination)
+            kwargs = {"limit": 0}
+            if vtype != "All": kwargs["type"] = vtype
+            export_res = api.list_vouchers(**kwargs)
+            export_vouchers = export_res.get("data", [])
+            
+            full_vouchers = []
+            for v_summary in export_vouchers:
+                vid = v_summary["_id"]
+                # Fetch full details including entries and stock items
+                v_full = api.get_voucher(vid)
+                v_full["invoice_items"] = api.get_voucher_stock_txns(vid)
+                
+                # Get Party Name and GSTIN from entries if possible
+                # Usually the first Cr entry for Sales is the Party
+                v_full["party_name"] = "Unknown Party"
+                v_full["gstin"] = ""
+                for e in v_full.get("entries", []):
+                    if e.get("dr_cr") == "Dr": # Party is Dr in Sales
+                        v_full["party_name"] = e.get("ledger_name", "Unknown Party")
+                        # Try to get GSTIN from ledger details (needs another API call or cached ledger info)
+                        try:
+                            l_detail = api.get_ledger(e["ledger_id"])
+                            v_full["gstin"] = l_detail.get("gstin", "")
+                        except:
+                            pass
+                        break
+                
+                full_vouchers.append(v_full)
+
+            # Get company info
+            try:
+                company = api.get_company(session.company_id)
+            except:
+                company = {"name": "Bestie Accounts", "financial_year": session.get_financial_year_str()}
+
+            date_range = f"{session.get_start_date().strftime('%d-%b-%y')} to {session.get_end_date().strftime('%d-%b-%y')}"
+            
+            export_sales_register(self, company, full_vouchers, date_range)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to prepare export data: {e}")

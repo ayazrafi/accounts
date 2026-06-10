@@ -40,6 +40,8 @@ class HeaderBar(QFrame):
     """Top application header bar."""
 
     theme_toggled = Signal(bool)       # True → dark mode
+    logout_requested = Signal()
+    company_toggle_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -75,10 +77,17 @@ class HeaderBar(QFrame):
         layout.addStretch()
 
         # Active company badge
-        self._company_badge = QLabel("")
+        self._company_badge = QPushButton("")
         self._company_badge.setObjectName("CompanyBadge")
         self._company_badge.setVisible(False)
+        self._company_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._company_badge.clicked.connect(self._on_company_badge_clicked)
         layout.addWidget(self._company_badge)
+
+        # Active user badge
+        self._user_badge = QLabel("")
+        self._user_badge.setObjectName("UserBadge")
+        layout.addWidget(self._user_badge)
 
         # Search
         self._search = SearchBar()
@@ -94,6 +103,17 @@ class HeaderBar(QFrame):
         self._dark_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._dark_toggle.clicked.connect(self._on_theme_toggle)
         layout.addWidget(self._dark_toggle)
+
+        # Logout
+        self._logout_btn = QPushButton()
+        self._logout_btn.setIcon(get_icon("frontend/assets/icons/logout.svg", THEME['danger']))
+        self._logout_btn.setIconSize(QSize(18, 18))
+        self._logout_btn.setObjectName("LogoutBtn")
+        self._logout_btn.setFixedSize(36, 36)
+        self._logout_btn.setToolTip("Logout  (Ctrl+L)")
+        self._logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._logout_btn.clicked.connect(self.logout_requested.emit)
+        layout.addWidget(self._logout_btn)
 
     # ── public API ────────────────────────────────────────────────────
     def set_page(self, title: str, breadcrumb: str = "Home"):
@@ -112,9 +132,19 @@ class HeaderBar(QFrame):
         else:
             self._company_badge.setVisible(False)
 
+    def set_user(self, username: str):
+        if username:
+            self._user_badge.setText(f"👤  {username}")
+            self._user_badge.setVisible(True)
+        else:
+            self._user_badge.setVisible(False)
+
     def focus_search(self):
         self._search.setFocus()
         self._search.selectAll()
+
+    def _on_company_badge_clicked(self):
+        self.company_toggle_requested.emit()
 
     # ── private ───────────────────────────────────────────────────────
     def _on_theme_toggle(self):
@@ -139,10 +169,22 @@ class HeaderBar(QFrame):
                 font-size: 11px;
                 color: {THEME['text_muted']};
             }}
-            QLabel#CompanyBadge {{
+            QPushButton#CompanyBadge {{
                 font-size: 12px;
                 color: {THEME['primary_dark']};
                 background: #DBEAFE;
+                border: none;
+                border-radius: 12px;
+                padding: 4px 12px;
+                font-weight: 600;
+            }}
+            QPushButton#CompanyBadge:hover {{
+                background: #BFDBFE;
+            }}
+            QLabel#UserBadge {{
+                font-size: 12px;
+                color: #047857;
+                background: #D1FAE5;
                 border-radius: 12px;
                 padding: 4px 12px;
                 font-weight: 600;
@@ -155,6 +197,15 @@ class HeaderBar(QFrame):
             }}
             QPushButton#DarkToggle:hover {{
                 background: {THEME['border']};
+            }}
+            QPushButton#LogoutBtn {{
+                background: transparent;
+                border: 1px solid {THEME['border']};
+                border-radius: 18px;
+            }}
+            QPushButton#LogoutBtn:hover {{
+                background: #FEE2E2;
+                border-color: {THEME['danger']};
             }}
         """)
 

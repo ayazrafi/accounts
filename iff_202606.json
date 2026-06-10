@@ -1,0 +1,77 @@
+{
+    "b2b": [
+        {
+            "ctin": "09AMYPS7235D1ZD",
+            "inv": [
+                {
+                    "idt": "12-05-2026",
+                    "inum": "SAL-00003",
+                    "inv_typ": "R",
+                    "itms": [
+                        {
+                            "itm_det": {
+                                "rt": 18.0,
+                                "txval": 16864.5,
+                                "camt": 1517.8,
+                                "samt": 1517.8,
+                                "csamt": 0
+                            },
+                            "num": 1
+                        }
+                    ],
+                    "pos": "27",
+                    "rchrg": "N",
+                    "val": 19900.1
+                },
+                {
+                    "idt": "30-05-2026",
+                    "inum": "SAL-00002",
+                    "inv_typ": "R",
+                    "itms": [
+                        {
+                            "itm_det": {
+                                "rt": 5.0,
+                                "txval": 4000.0,
+                                "camt": 100.0,
+                                "samt": 100.0,
+                                "csamt": 0
+                            },
+                            "num": 1
+                        }
+                    ],
+                    "pos": "27",
+                    "rchrg": "N",
+                    "val": 4200.0
+                }
+            ]
+        },
+        {
+            "ctin": "10AAQPY5115N1Z9",
+            "inv": [
+                {
+                    "idt": "28-05-2026",
+                    "inum": "SAL-00001",
+                    "inv_typ": "R",
+                    "itms": [
+                        {
+                            "itm_det": {
+                                "rt": 18.0,
+                                "txval": 7499.5,
+                                "iamt": 1349.91,
+                                "csamt": 0
+                            },
+                            "num": 1
+                        }
+                    ],
+                    "pos": "27",
+                    "rchrg": "N",
+                    "val": 8849.41
+                }
+            ]
+        }
+    ],
+    "fp": "062026",
+    "gstin": "09AMZPD8631P1Z0",
+    "hash": "hash",
+    "version": "GST3.2.4"
+}

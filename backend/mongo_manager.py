@@ -4,6 +4,7 @@ Checks if MongoDB is running on the configured port.
 If not, finds mongod.exe and starts it automatically.
 """
 import os
+import sys
 import socket
 import subprocess
 import time
@@ -14,7 +15,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGO_PORT = int(os.getenv("MONGO_URI", "mongodb://localhost:27021/").split(":")[-1].rstrip("/"))
-DATA_DIR = os.getenv("MONGO_DBPATH", r"C:\data\db")
+
+if getattr(sys, 'frozen', False):
+    # Packaged production environment - use safe local AppData folder
+    DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "BestieAccounts", "db")
+else:
+    DATA_DIR = os.getenv("MONGO_DBPATH", r"C:\data\db")
 
 
 def is_port_open(host: str = "127.0.0.1", port: int = None) -> bool:
@@ -29,6 +35,21 @@ def is_port_open(host: str = "127.0.0.1", port: int = None) -> bool:
 
 def _find_mongod() -> str | None:
     """Try to locate mongod.exe on this machine."""
+    # 0. Packaged environment search (Option B or Onefile)
+    if getattr(sys, 'frozen', False):
+        # A. Check internal PyInstaller temp dir (sys._MEIPASS)
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            bundled = os.path.join(meipass, "bin", "mongod.exe")
+            if os.path.isfile(bundled):
+                return bundled
+        
+        # B. Check local 'bin' directory next to the executable
+        exe_dir = os.path.dirname(sys.executable)
+        local_bin = os.path.join(exe_dir, "bin", "mongod.exe")
+        if os.path.isfile(local_bin):
+            return local_bin
+
     # 1. Already on PATH
     import shutil
     found = shutil.which("mongod")

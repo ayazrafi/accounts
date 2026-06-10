@@ -359,6 +359,7 @@ class LedgerPage(QWidget):
         self.table.horizontalHeader().resizeSection(5, 180)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSortingEnabled(True)
         self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.installEventFilter(self)
         layout.addWidget(self.table)
@@ -400,6 +401,8 @@ class LedgerPage(QWidget):
             parent = g.get("parent", "") or ""
             return name == "Duties & Taxes" or parent == "Duties & Taxes"
 
+        # Block signals to prevent sorting while populating
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         for row, l in enumerate(ledgers):
             self.table.insertRow(row)
@@ -435,6 +438,7 @@ class LedgerPage(QWidget):
             cell_lay.addStretch()
             self.table.setCellWidget(row, 5, cell)
 
+        self.table.setSortingEnabled(True)
         if self.table.rowCount() > 0:
             self.table.setCurrentCell(0, 0)
             self.table.setFocus()
@@ -446,6 +450,9 @@ class LedgerPage(QWidget):
         self._display(filtered)
 
     def _add(self):
+        if not session.has_permission("ledger", "edit"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create Ledgers.")
+            return
         dlg = LedgerDialog(self, self._groups)
         if dlg.exec():
             data = dlg.get_data()
@@ -459,6 +466,9 @@ class LedgerPage(QWidget):
                 QMessageBox.warning(self, "Error", str(ex))
 
     def _edit(self, ledger: dict):
+        if not session.has_permission("ledger", "update"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to edit Ledgers.")
+            return
         dlg = LedgerDialog(self, self._groups, data=ledger)
         if dlg.exec():
             data = dlg.get_data()
@@ -472,6 +482,9 @@ class LedgerPage(QWidget):
                 QMessageBox.warning(self, "Error", str(ex))
 
     def _delete(self, lid):
+        if not session.has_permission("ledger", "delete"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to delete Ledgers.")
+            return
         reply = MessageBox.question(self, "Confirm", "Delete this ledger?")
         if reply == QMessageBox.StandardButton.Yes:
             try:

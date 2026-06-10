@@ -23,6 +23,8 @@ THEME = {
 
     # Brand colours
     "primary":      "#3B82F6",   # blue
+    "primary_hover": "#60A5FA",
+    "primary_active": "#2563EB",
     "primary_dark": "#2563EB",
     "success":      "#16A34A",
     "success_dark": "#15803D",
@@ -250,11 +252,40 @@ QHeaderView::section {{
     background: {THEME['bg']};
     color: {THEME['text_secondary']};
     font-weight: 600;
-    font-size: 12px;
+    font-size: 11px;
     text-transform: uppercase;
     padding: 8px 12px;
     border: none;
     border-bottom: 2px solid {THEME['border']};
+}}
+
+/* ── Sorting arrows ── */
+QHeaderView::up-arrow {{
+    image: url("frontend/assets/icons/chevron-up.svg");
+    width: 10px; height: 10px; padding-right: 5px;
+}}
+QHeaderView::down-arrow {{
+    image: url("frontend/assets/icons/chevron-down.svg");
+    width: 10px; height: 10px; padding-right: 5px;
+}}
+
+/* ── Table Cell Editors (Full height/width) ── */
+QTableWidget QLineEdit, 
+QTableWidget QDoubleSpinBox, 
+QTableWidget QSpinBox, 
+QTableWidget QComboBox {{
+    border: none;
+    border-radius: 0;
+    background: #FFFFFF;
+    padding: 0 8px;
+    margin: 0;
+    height: 100%;
+}}
+QTableWidget QLineEdit:focus, 
+QTableWidget QDoubleSpinBox:focus, 
+QTableWidget QSpinBox:focus {{
+    background: #EBF2FF;
+    border: 1px solid {THEME['primary']};
 }}
 
 /* ── QDialog ── */
@@ -318,4 +349,15 @@ def apply_global_style(app: QApplication) -> None:
     pal.setColor(QPalette.ColorRole.Link,            QColor(THEME["primary"]))
     app.setPalette(pal)
 
-    app.setStyleSheet(GLOBAL_QSS)
+    # Resolve QSS resource paths dynamically in PyInstaller package
+    import sys
+    import os
+    style_qss = GLOBAL_QSS
+    base_path = getattr(sys, '_MEIPASS', None)
+    if base_path:
+        # Convert backslashes to forward slashes for QSS urls on Windows
+        resolved_prefix = os.path.join(base_path, "frontend/assets").replace('\\', '/')
+        style_qss = style_qss.replace('url("frontend/assets', f'url("{resolved_prefix}')
+
+    app.setStyleSheet(style_qss)
+

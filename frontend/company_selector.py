@@ -93,13 +93,13 @@ class CompanySelectorDialog(QDialog):
     def _load(self):
         self.list_widget.clear()
         try:
-            self._companies = api.list_companies()
+            self._companies = api.get_my_companies()
         except Exception as ex:
             QMessageBox.warning(self, "Error", f"Cannot reach backend:\n{ex}")
             return
 
-        if not self._companies:
-            # No companies yet — prompt to create one immediately
+        if not self._companies and session.is_super_admin:
+            # No companies yet and is super admin — prompt to create one immediately
             r = QMessageBox.information(
                 self, "No Companies Found",
                 "No companies found.\nCreate your first company to get started.",
@@ -107,10 +107,18 @@ class CompanySelectorDialog(QDialog):
             )
             self._create_new()
             return
+        elif not self._companies:
+             QMessageBox.warning(self, "Access Denied", "No companies assigned to your account. Please contact administrator.")
+             self.reject()
+             return
 
         for c in self._companies:
-            fy = f"  FY: {c.get('fiscal_year_from','')[:7]} → {c.get('fiscal_year_to','')[:7]}"
-            item = QListWidgetItem(f"  {c['name']}\n  {c.get('address','')}{fy}")
+            # Map API fields to UI
+            # In get_my_companies, 'id' is returned as 'id', but in list_companies it was '_id'
+            # Let's standardize on 'id'
+            name = c.get('name', 'Unknown')
+            role = c.get('role', 'User')
+            item = QListWidgetItem(f"  {name}\n  Role: {role}")
             item.setIcon(get_icon("frontend/assets/icons/company.svg", "#475569"))
             item.setSizeHint(QSize(480, 60))
             self.list_widget.addItem(item)
@@ -125,13 +133,22 @@ class CompanySelectorDialog(QDialog):
             QMessageBox.warning(self, "Select Company", "Please select a company first.")
             return
         c = self._companies[idx]
-        session.set_company(
-            cid=c["_id"],
-            name=c["name"],
-            fy_from=c.get("fiscal_year_from", ""),
-            fy_to=c.get("fiscal_year_to", ""),
-        )
-        self.accept()
+        
+        # If it's a regular user, we should fetch full company details to get FY
+        try:
+            full_c = api.get_company(c["id"])
+            session.set_company(
+                cid=c["id"],
+                name=full_c["name"],
+                fy_from=full_c.get("fiscal_year_from", ""),
+                fy_to=full_c.get("fiscal_year_to", ""),
+            )
+            # Fetch and store permissions for this company
+            perms = api.get_permissions(c["id"])
+            session.permissions = perms
+            self.accept()
+        except Exception as ex:
+             QMessageBox.warning(self, "Error", f"Failed to load company details: {ex}")
 
     def _create_new(self):
         from frontend.pages.company import CompanyDialog

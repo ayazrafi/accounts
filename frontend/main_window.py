@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QStackedWidget, QStatusBar, QLabel
+    QStackedWidget, QStatusBar, QLabel, QMessageBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon
 
 from frontend.pages.dashboard import DashboardPage
@@ -21,9 +21,15 @@ from frontend.pages.credit_note import CreditNoteDialog
 from frontend.pages.debit_note import DebitNoteDialog
 from frontend.components.sidebar import Sidebar
 from frontend.components.header import HeaderBar, DARK_QSS
+from frontend.components.company_drawer import CompanyDrawer
 from frontend.theme import THEME, GLOBAL_QSS
 import frontend.session as session
+import frontend.api_client as api
 from frontend.pages.import_sales import ImportSalesVoucherDialog
+from frontend.pages.import_purchase import ImportPurchaseVoucherDialog
+from frontend.pages.import_payment import ImportPaymentReceiptDialog
+from frontend.pages.gstr_report import GSTRReportPage
+from frontend.pages.user_management import UserManagementPage
 
 # Page title / breadcrumb map (index → (title, breadcrumb))
 _PAGE_META = {
@@ -36,7 +42,9 @@ _PAGE_META = {
     6: ("Ledger Statement", "Reports  ›  Ledger Statement"),
     7: ("Inventory",        "Home  ›  Inventory"),
     8: ("Balance Sheet",    "Reports  ›  Balance Sheet"),
-    9: ("Settings",         "Home  ›  Settings"),
+    9: ("GSTR Report",      "Reports  ›  GSTR Report"),
+    10: ("Settings",         "Home  ›  Settings"),
+    11: ("User Management", "Home  ›  User Management"),
 }
 
 
@@ -48,7 +56,42 @@ class MainWindow(QMainWindow):
         self._dark_mode = False
         self._build_ui()
         self._setup_shortcuts()
+        self.header.set_user(session.username)
         self.refresh_company_header()
+        self.sidebar.refresh_permissions()
+        self._start_heartbeat()
+        
+        self.header.logout_requested.connect(self._on_logout_click)
+
+    def _on_logout_click(self):
+        reply = QMessageBox.question(
+            self, "Confirm Logout",
+            "Are you sure you want to logout and exit?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try: api.logout()
+            except: pass
+            self.force_logout()
+
+    def _start_heartbeat(self):
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.timeout.connect(self._validate_session)
+        self._heartbeat_timer.start(60000) # Every 1 minute
+
+    def _validate_session(self):
+        try:
+            api.validate_session()
+        except Exception as e:
+            self._heartbeat_timer.stop()
+            QMessageBox.critical(self, "Session Expired", f"Your session has ended or your account was deactivated.\nReason: {e}")
+            self.force_logout()
+
+    def force_logout(self):
+        session.clear()
+        # In a real app, we might want to restart the process or show login again
+        # For now, let's just close the window which will trigger a restart requirement
+        self.close()
 
     # ──────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -64,6 +107,9 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar()
         self.sidebar.nav_item_changed.connect(self._on_nav_changed)
         self.sidebar.import_requested.connect(self.open_import_sales)
+        self.sidebar.import_purchase_requested.connect(self.open_import_purchase)
+        self.sidebar.import_payment_requested.connect(self.open_import_payment)
+        self.sidebar.company_toggle_requested.connect(self.toggle_company_drawer)
         root_layout.addWidget(self.sidebar)
 
         # ── Right panel (header + pages) ──────────────────────────────
@@ -76,6 +122,7 @@ class MainWindow(QMainWindow):
         # Header
         self.header = HeaderBar()
         self.header.theme_toggled.connect(self._on_theme_toggle)
+        self.header.company_toggle_requested.connect(self.toggle_company_drawer)
         right_layout.addWidget(self.header)
 
         # Page stack
@@ -91,7 +138,9 @@ class MainWindow(QMainWindow):
             LedgerReportPage(),
             InventoryPage(),
             BalanceSheetPage(),
+            GSTRReportPage(),
             SettingsPage(),
+            UserManagementPage(),
         ]
         for p in self.page_list:
             self.pages.addWidget(p)
@@ -99,6 +148,13 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.pages, 1)
 
         root_layout.addWidget(right_panel, 1)
+
+        # ── Company Drawer ────────────────────────────────────────────
+        self.company_drawer = CompanyDrawer(self)
+        self.company_drawer.setVisible(False)
+        self.company_drawer.company_changed.connect(self._on_company_changed_in_drawer)
+        self.company_drawer.close_requested.connect(lambda: self.company_drawer.setVisible(False))
+        root_layout.addWidget(self.company_drawer)
 
         # ── Status bar ────────────────────────────────────────────────
         self._status_bar = QStatusBar()
@@ -173,10 +229,15 @@ class MainWindow(QMainWindow):
         sc_rep.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_rep.activated.connect(lambda: self._navigate_to(6))
         
+        # Alt+R → GSTR Report
+        sc_gstr = QShortcut(QKeySequence("Alt+R"), self)
+        sc_gstr.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_gstr.activated.connect(lambda: self._navigate_to(9))
+        
         # Alt+G → Settings
         sc_sett = QShortcut(QKeySequence("Alt+G"), self)
         sc_sett.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        sc_sett.activated.connect(lambda: self._navigate_to(9))
+        sc_sett.activated.connect(lambda: self._navigate_to(10))
         
         # Ctrl+M → Toggle Sidebar
         sc_side = QShortcut(QKeySequence("Ctrl+M"), self)
@@ -185,6 +246,14 @@ class MainWindow(QMainWindow):
         # Ctrl+Alt+I → Import Sales Voucher
         sc_import = QShortcut(QKeySequence("Ctrl+Alt+I"), self)
         sc_import.activated.connect(self.open_import_sales)
+
+        # Ctrl+Alt+P → Import Purchase Voucher
+        sc_import_p = QShortcut(QKeySequence("Ctrl+Alt+P"), self)
+        sc_import_p.activated.connect(self.open_import_purchase)
+
+        # Ctrl+Alt+R → Import Payment / Receipt Voucher
+        sc_import_r = QShortcut(QKeySequence("Ctrl+Alt+R"), self)
+        sc_import_r.activated.connect(self.open_import_payment)
 
     # ──────────────────────────────────────────────────────────────────
     def _navigate_to(self, index: int):
@@ -198,8 +267,29 @@ class MainWindow(QMainWindow):
         title, bc = _PAGE_META.get(index, ("", "Home"))
         self.header.set_page(title, bc)
 
+    def toggle_company_drawer(self):
+        if not self.company_drawer.isVisible():
+            self.company_drawer.load_companies()
+            self.company_drawer.setVisible(True)
+        else:
+            self.company_drawer.setVisible(False)
+
+    def _on_company_changed_in_drawer(self):
+        self.refresh_company_header()
+        self.sidebar.refresh_permissions()
+        
+        # Reload current page if it supports it
+        cur = self.pages.currentWidget()
+        if cur and hasattr(cur, "_load"):
+            cur._load()
+
     def open_credit_note(self, voucher=None):
         """Open CreditNoteDialog as a maximized modal dialog."""
+        action = "update" if voucher else "edit"
+        if not session.has_permission("Credit Note", action):
+            QMessageBox.warning(self, "Permission Denied", f"You do not have permission to {action} Credit Notes.")
+            return
+            
         dlg = CreditNoteDialog(self)
         dlg.set_voucher(voucher)
         if dlg.exec():
@@ -209,6 +299,11 @@ class MainWindow(QMainWindow):
 
     def open_debit_note(self, voucher=None):
         """Open DebitNoteDialog as a maximized modal dialog."""
+        action = "update" if voucher else "edit"
+        if not session.has_permission("Debit Note", action):
+            QMessageBox.warning(self, "Permission Denied", f"You do not have permission to {action} Debit Notes.")
+            return
+            
         dlg = DebitNoteDialog(self)
         dlg.set_voucher(voucher)
         if dlg.exec():
@@ -218,11 +313,44 @@ class MainWindow(QMainWindow):
 
     def open_import_sales(self):
         """Open ImportSalesVoucherDialog."""
+        if not session.has_permission("Sales", "edit"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create/import Sales.")
+            self.sidebar.clear_import_selection()
+            return
+            
         dlg = ImportSalesVoucherDialog(self)
-        if dlg.exec():
-            # If we are on the Voucher Entry page, refresh the list
-            if self.pages.currentIndex() == 3:
-                self.page_list[3]._load()
+        dlg.exec()
+        self.sidebar.clear_import_selection()
+        if self.pages.currentIndex() == 3:
+            self.page_list[3]._load()
+
+    def open_import_purchase(self):
+        """Open ImportPurchaseVoucherDialog."""
+        if not session.has_permission("Purchase", "edit"):
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create/import Purchases.")
+            self.sidebar.clear_import_selection()
+            return
+            
+        dlg = ImportPurchaseVoucherDialog(self)
+        dlg.exec()
+        self.sidebar.clear_import_selection()
+        if self.pages.currentIndex() == 3:
+            self.page_list[3]._load()
+
+    def open_import_payment(self):
+        """Open ImportPaymentReceiptDialog."""
+        can_pay = session.has_permission("Payment", "edit")
+        can_rec = session.has_permission("Receipt", "edit")
+        if not can_pay and not can_rec:
+            QMessageBox.warning(self, "Permission Denied", "You do not have permission to create/import Payments or Receipts.")
+            self.sidebar.clear_import_selection()
+            return
+            
+        dlg = ImportPaymentReceiptDialog(self)
+        dlg.exec()
+        self.sidebar.clear_import_selection()
+        if self.pages.currentIndex() == 3:
+            self.page_list[3]._load()
 
     # ──────────────────────────────────────────────────────────────────
     def _on_theme_toggle(self, dark: bool):

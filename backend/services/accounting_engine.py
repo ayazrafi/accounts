@@ -51,9 +51,10 @@ class AccountingEngine:
             else:
                 other_entries.append(e)
 
-            # STRICT Validation: GST/Sales/Purchase ledger prohibited
-            if group_name in ["Duties & Taxes", "Sales Accounts", "Purchase Accounts"]:
-                return self._error(f"GST/Sales/Purchase ledger '{ledger['name']}' not allowed in payment/receipt")
+            # Block Sales/Purchase ledgers outright — they must never appear in Payment/Receipt.
+            # 'Duties & Taxes' is intentionally NOT blocked here (e.g. GST Deposit payments are valid).
+            if group_name in ["Sales Accounts", "Purchase Accounts"]:
+                return self._error(f"Sales/Purchase ledger '{ledger['name']}' not allowed in payment/receipt. Use a Purchase/Sales voucher instead.")
 
         if len(cash_bank_entries) != 1:
             return self._error("Only ONE Cash/Bank ledger allowed per voucher")
@@ -61,22 +62,17 @@ class AccountingEngine:
         cb_entry = cash_bank_entries[0]
         v_type = "Receipt" if cb_entry["dr_cr"] == "Dr" else "Payment"
 
-        # Scenario Validation
+        # Scenario Validation — block only clearly wrong groups.
+        # Payment/Receipt should NOT include Sales or Purchase ledgers.
+        # Note: 'Duties & Taxes' IS allowed — paying GST to the govt (GST Deposit) is valid.
+        invalid_for_payment = ["Sales Accounts", "Purchase Accounts"]
         for e in other_entries:
             gn = e["group_name"]
-            if v_type == "Receipt":
-                # Customer Receipt: Customer must be under Sundry Debtors
-                if gn != "Sundry Debtors":
-                    return self._error(f"Receipt must be from Sundry Debtors. Found '{e['ledger_name']}' under '{gn}'")
-            else: # Payment
-                # Payment to Supplier or Expense
-                valid_payment_groups = [
-                    "Sundry Creditors", 
-                    "Indirect Expenses", "Direct Expenses", 
-                    "Expenses (Direct)", "Expenses (Indirect)"
-                ]
-                if gn not in valid_payment_groups:
-                    return self._error(f"Payment must be to Sundry Creditors or Expense ledger. Found '{e['ledger_name']}' under '{gn}'")
+            if gn in invalid_for_payment:
+                return self._error(
+                    f"'{e['ledger_name']}' (under '{gn}') cannot be used in a Payment/Receipt voucher. "
+                    "Use a Purchase or Journal voucher instead."
+                )
 
         # Linking Validation (If Provided)
         linking = data.get("linking")

@@ -129,7 +129,8 @@ def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
                 date=date,
                 company_id=company_id,
                 discount=it.get("discount", 0.0),
-                scheme=it.get("scheme", 0.0)
+                scheme=it.get("scheme", 0.0),
+                final_rate=it.get("final_rate", 0.0)
             )
 
     return vid
@@ -200,18 +201,29 @@ def get_voucher(voucher_id: str) -> dict | None:
     }
 
 
-def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str = None,
-                  company_id: str = None) -> list:
+def list_vouchers(voucher_type = None, from_date: str = None, to_date: str = None,
+                  company_id: str = None, page: int = 1, limit: int = 50) -> dict:
     q = Voucher.objects
     if company_id:
         q = q.filter(company_id=ObjectId(company_id))
     if voucher_type:
-        q = q.filter(voucher_type=voucher_type)
+        if isinstance(voucher_type, list):
+            q = q.filter(voucher_type__in=voucher_type)
+        else:
+            q = q.filter(voucher_type=voucher_type)
     if from_date:
         q = q.filter(date__gte=datetime.strptime(from_date, "%Y-%m-%d"))
     if to_date:
         q = q.filter(date__lte=datetime.strptime(to_date, "%Y-%m-%d"))
+    
+    total = q.count()
+    
     q = q.order_by('-date')
+    
+    # Apply pagination
+    if limit > 0:
+        skip = (page - 1) * limit
+        q = q.skip(skip).limit(limit)
 
     # Build a snapshot list so we can iterate q twice (once for vids, once for output)
     vouchers = list(q)
@@ -262,7 +274,7 @@ def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str 
         if item.dr_cr == side:
             party_names[vid_str] = item.ledger_name
 
-    return [
+    data = [
         {
             "_id":          str(v.id),
             "voucher_no":   v.voucher_no,
@@ -275,6 +287,13 @@ def list_vouchers(voucher_type: str = None, from_date: str = None, to_date: str 
         }
         for v in vouchers
     ]
+    
+    return {
+        "data": data,
+        "total": total,
+        "page": page,
+        "limit": limit
+    }
 
 
 def delete_voucher(voucher_id: str):
@@ -333,7 +352,8 @@ def update_voucher(voucher_id: str, date: str, narration: str, entries: list,
                 date=date,
                 company_id=str(v.company_id),
                 discount=it.get("discount", 0.0),
-                scheme=it.get("scheme", 0.0)
+                scheme=it.get("scheme", 0.0),
+                final_rate=it.get("final_rate", 0.0)
             )
 
     # Replace all items

@@ -144,7 +144,7 @@ class InvoicePdfViewer(QDialog):
                 if name and amt:
                     adj_ledgers.append([name, amt, dr_cr])
 
-        gross_subtotal = sum(it.get("qty", 0.0) * it.get("rate", 0.0) for it in items)
+        gross_subtotal = sum(it.get("qty", 0.0) * float(it.get("final_rate") or it.get("rate") or 0.0) for it in items)
 
         total_item_disc = 0.0
         total_item_scheme = 0.0
@@ -319,7 +319,7 @@ class InvoicePdfViewer(QDialog):
         for i, item in enumerate(items, 1):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
             q = float(item.get('qty', 0.0) or 0.0)
-            r = float(item.get('rate', 0.0) or 0.0)
+            r = float(item.get('final_rate') or item.get('rate') or 0.0)
             line_amt = item.get('amount', q * r) # Use 'amount' if available (pre-tax taxable value)
             html += f"""
                                 <tr>
@@ -434,7 +434,7 @@ class InvoicePdfViewer(QDialog):
             elif amt and any(x in gname for x in ["DUTIES", "TAX", "EXPENSE", "INCOME", "DISCOUNT"]):
                 adjustments.append((name, amt, dr_cr))
 
-        taxable = sum(float(it.get("qty", 0.0) or 0.0) * float(it.get("rate", 0.0) or 0.0) for it in items)
+        taxable = sum(float(it.get("qty", 0.0) or 0.0) * float(it.get("final_rate") or it.get("rate") or 0.0) for it in items)
         tax_total = sum(amt for name, amt, _ in adjustments if any(t in name.upper() for t in ["GST", "TAX", "CGST", "SGST", "IGST"]))
         if not grand_total:
             grand_total = taxable + sum(amt for _, amt, _ in adjustments)
@@ -502,7 +502,7 @@ class InvoicePdfViewer(QDialog):
         for i, item in enumerate(items, 1):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
             qty = float(item.get("qty", 0.0) or 0.0)
-            rate = float(item.get("rate", 0.0) or 0.0)
+            rate = float(item.get('final_rate') or item.get('rate') or 0.0)
             amount = qty * rate
             rows += f"""
                 <tr>
@@ -626,7 +626,7 @@ class InvoicePdfViewer(QDialog):
         for i, item in enumerate(items, 1):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
             qty = float(item.get("qty", 0.0) or 0.0)
-            rate = float(item.get("rate", 0.0) or 0.0)
+            rate = float(item.get('final_rate') or item.get('rate') or 0.0)
             rows += f"""
                 <tr>
                     <td class="center">{i}</td>

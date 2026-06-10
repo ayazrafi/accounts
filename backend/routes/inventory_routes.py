@@ -8,6 +8,7 @@ from backend.models.inventory import (
     create_stock_item, update_stock_item, delete_stock_item,
     get_stock_balance, seed_defaults
 )
+from backend.routes.auth_routes import check_permission_backend
 
 inventory_bp = Blueprint("inventory", __name__, url_prefix="/api/inventory")
 
@@ -45,6 +46,8 @@ def add_stock_group():
 # ── Stock Categories ───────────────────────────────────────────────────────────
 @inventory_bp.get("/stock-categories")
 def list_stock_categories():
+    if not check_permission_backend('item', 'view'):
+        return jsonify({"error": "Forbidden"}), 403
     company_id = request.args.get("company_id")
     stock_group = request.args.get("stock_group")
     return jsonify(get_stock_categories(company_id=company_id, stock_group=stock_group))
@@ -52,6 +55,8 @@ def list_stock_categories():
 
 @inventory_bp.post("/stock-categories")
 def add_stock_category():
+    if not check_permission_backend('item', 'edit'):
+        return jsonify({"error": "Forbidden"}), 403
     data = request.json or {}
     if not data.get("name") or not data.get("company_id"):
         return jsonify({"error": "name and company_id required"}), 400
@@ -61,6 +66,8 @@ def add_stock_category():
 
 @inventory_bp.put("/stock-categories/<cat_id>")
 def edit_stock_category(cat_id):
+    if not check_permission_backend('item', 'update'):
+        return jsonify({"error": "Forbidden"}), 403
     data = request.json or {}
     update_stock_category(cat_id, data)
     return jsonify({"ok": True})
@@ -68,6 +75,8 @@ def edit_stock_category(cat_id):
 
 @inventory_bp.delete("/stock-categories/<cat_id>")
 def remove_stock_category(cat_id):
+    if not check_permission_backend('item', 'delete'):
+        return jsonify({"error": "Forbidden"}), 403
     delete_stock_category(cat_id)
     return jsonify({"ok": True})
 
@@ -75,12 +84,16 @@ def remove_stock_category(cat_id):
 # ── Stock Items ────────────────────────────────────────────────────────────────
 @inventory_bp.get("/items")
 def list_items():
+    if not check_permission_backend('item', 'view'):
+        return jsonify({"error": "Forbidden"}), 403
     company_id = request.args.get("company_id")
     return jsonify(get_stock_items(company_id=company_id))
 
 
 @inventory_bp.get("/items/<item_id>")
 def get_item(item_id):
+    if not check_permission_backend('item', 'view'):
+        return jsonify({"error": "Forbidden"}), 403
     doc = get_stock_item(item_id)
     if not doc:
         return jsonify({"error": "Not found"}), 404
@@ -89,6 +102,8 @@ def get_item(item_id):
 
 @inventory_bp.post("/items")
 def add_item():
+    if not check_permission_backend('item', 'edit'):
+        return jsonify({"error": "Forbidden"}), 403
     data = request.json or {}
     if not data.get("name"):
         return jsonify({"error": "name required"}), 400
@@ -100,6 +115,8 @@ def add_item():
 
 @inventory_bp.put("/items/<item_id>")
 def edit_item(item_id):
+    if not check_permission_backend('item', 'update'):
+        return jsonify({"error": "Forbidden"}), 403
     data = request.json or {}
     update_stock_item(item_id, data)
     return jsonify({"ok": True})
@@ -107,6 +124,8 @@ def edit_item(item_id):
 
 @inventory_bp.delete("/items/<item_id>")
 def remove_item(item_id):
+    if not check_permission_backend('item', 'delete'):
+        return jsonify({"error": "Forbidden"}), 403
     delete_stock_item(item_id)
     return jsonify({"ok": True})
 
@@ -114,6 +133,8 @@ def remove_item(item_id):
 # ── Stock Summary ──────────────────────────────────────────────────────────────
 @inventory_bp.get("/stock-summary")
 def stock_summary():
+    if not check_permission_backend('item', 'view'):
+        return jsonify({"error": "Forbidden"}), 403
     item_id = request.args.get("item_id")
     company_id = request.args.get("company_id")
     rows = get_stock_balance(item_id, company_id=company_id)

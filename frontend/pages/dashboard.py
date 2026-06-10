@@ -141,14 +141,15 @@ class DashboardPage(QWidget):
         try:
             companies = api.list_companies()
             ledgers   = api.list_ledgers()
-            vouchers  = api.list_vouchers()
+            v_res     = api.list_vouchers()
+            vouchers_count = v_res.get("total", 0)
         except Exception:
-            companies, ledgers, vouchers = [], [], []
+            companies, ledgers, vouchers_count = [], [], 0
 
         kpis = [
             ("Companies",   len(companies),  "frontend/assets/icons/company.svg", THEME["primary"]),
             ("Ledgers",     len(ledgers),    "frontend/assets/icons/book.svg", THEME["info"]),
-            ("Vouchers",    len(vouchers),   "frontend/assets/icons/edit-file.svg", THEME["success"]),
+            ("Vouchers",    vouchers_count,   "frontend/assets/icons/edit-file.svg", THEME["success"]),
             ("Voucher Types", 8,             "frontend/assets/icons/settings.svg", THEME["warning"]),
         ]
         for col, (title, val, icon, color) in enumerate(kpis):
