@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QMessageBox as MessageBox
 import frontend.api_client as api
 from frontend.utils import setup_enter_nav, SearchableComboBox, wire_create_new, wire_edit_selected, get_icon, wire_state_combo, format_indian_number
 from frontend.components.cards import PillActionButton, IconActionButton
+import frontend.session as session
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +88,7 @@ class LedgerDialog(QDialog):
         wire_create_new(self.group_cb, _create_group)
 
         def _edit_group(group_id):
-            """Alt+V: edit the currently selected group."""
+            """Ctrl+Enter: edit the currently selected group."""
             try:
                 all_groups = api.list_groups()
             except Exception:
@@ -145,6 +147,52 @@ class LedgerDialog(QDialog):
         wire_state_combo(self.state, self.data.get("state", ""))
         self.gst_no = QLineEdit(self.data.get("gst_no", ""))
 
+        self.transporter_cb = SearchableComboBox()
+        self.transporter_cb.addItem("Select Transporter", None)
+        try:
+            transports = api.list_transports()
+        except Exception:
+            transports = []
+        for t in transports:
+            self.transporter_cb.addItem(t["name"], t["_id"])
+        if self.data.get("transporter"):
+            for i in range(self.transporter_cb.count()):
+                if str(self.transporter_cb.itemData(i)) == str(self.data["transporter"]):
+                    self.transporter_cb.setCurrentIndex(i)
+                    break
+
+        def _create_transporter():
+            from frontend.pages.transport import TransportDialog
+            dlg = TransportDialog(self)
+            if dlg.exec():
+                d = dlg.get_data()
+                try:
+                    resp = api.create_transporter(d)
+                    new_id = resp.get("id", "")
+                    transports.append({**d, "_id": new_id})
+                    return (d["name"], new_id)
+                except Exception as ex:
+                    QMessageBox.warning(self, "Error", str(ex))
+            return None
+        wire_create_new(self.transporter_cb, _create_transporter)
+
+        def _edit_transporter(transporter_id):
+            from frontend.pages.transport import TransportDialog
+            t = next((x for x in transports if str(x["_id"]) == str(transporter_id)), None)
+            if not t:
+                return None
+            dlg = TransportDialog(self, data=t)
+            if dlg.exec():
+                d = dlg.get_data()
+                try:
+                    api.update_transporter(transporter_id, d)
+                    t.update(d)
+                    return (d["name"], transporter_id)
+                except Exception as ex:
+                    QMessageBox.warning(self, "Error", str(ex))
+            return None
+        wire_edit_selected(self.transporter_cb, _edit_transporter)
+
         # ── Bank Details (visible only for Bank Accounts group) ───────────────
         self.bank_name = QLineEdit(self.data.get("bank_name", ""))
         self.acc_holder = QLineEdit(self.data.get("account_holder_name", ""))
@@ -173,6 +221,7 @@ class LedgerDialog(QDialog):
         form.addRow("Address", self.address)
         form.addRow("State", self.state)
         form.addRow("GST No", self.gst_no)
+        form.addRow("Transporter", self.transporter_cb)
         
         # Bank rows
         form.addRow("Account Holder", self.acc_holder)
@@ -185,6 +234,7 @@ class LedgerDialog(QDialog):
         setup_enter_nav(self, [
             self.name, self.group_cb, self.opening, self.btype_cb,
             self.tax_rate, self.phone, self.email, self.address, self.state, self.gst_no,
+            self.transporter_cb,
             self.acc_holder, self.bank_name, self.acc_no, self.ifsc, self.branch, self.acc_type
         ])
 
@@ -246,12 +296,17 @@ class LedgerDialog(QDialog):
             lbl_gst = layout.labelForField(self.gst_no)
             if lbl_gst: lbl_gst.setVisible(party_visible)
             
+            lbl_trans = layout.labelForField(self.transporter_cb)
+            if lbl_trans: lbl_trans.setVisible(party_visible)
+            
         self.state.setVisible(party_visible)
         self.gst_no.setVisible(party_visible)
+        self.transporter_cb.setVisible(party_visible)
 
         if not party_visible:
             self.state.setCurrentIndex(0)
             self.gst_no.clear()
+            self.transporter_cb.setCurrentIndex(0)
 
         # Bank visibility
         bank_visible = bool(group_id and self._is_bank_group(str(group_id)))
@@ -296,6 +351,7 @@ class LedgerDialog(QDialog):
             "address": self.address.text().strip(),
             "state": _val(self.state),
             "gst_no": self.gst_no.text().strip(),
+            "transporter": str(transporter_id) if (transporter_id := self.transporter_cb.currentData()) else "",
             "bank_name": self.bank_name.text().strip(),
             "account_holder_name": self.acc_holder.text().strip(),
             "account_number": self.acc_no.text().strip(),

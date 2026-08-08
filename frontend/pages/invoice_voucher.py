@@ -518,12 +518,7 @@ class InvoiceVoucherDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)  # normal inner padding
         root.setSpacing(10)
-        hdr = QWidget(); hdr.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        hdr.setStyleSheet("background:#1565C0;border-radius:6px;padding:4px;")
-        hdr_lay = QHBoxLayout(hdr)
-        vt_lbl = QLabel(vtype.upper())
-        vt_lbl.setStyleSheet("color:#fff;font-size:16px;font-weight:bold;")
-        hdr_lay.addWidget(vt_lbl); hdr_lay.addStretch()
+        # Removed header blue banner widget
         self.date_edit = DateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True); self.date_edit.setDisplayFormat("d-MMM-yy")
         
@@ -536,16 +531,60 @@ QToolButton#qt_calendar_nextmonth {
 }
 """)
 
-        hdr_lay.addWidget(QLabel("<span style='color:#bbdefb'>Date:</span>"))
-        hdr_lay.addWidget(self.date_edit)
+        # DateEdit is added to the grid below instead of the header
 
         # Supplier Invoice No/Date (Only for Purchase)
         self.supp_inv_no = QLineEdit()
         self.supp_inv_no.setPlaceholderText("Supplier Invoice No.")
         self.supp_inv_date = DateEdit(QDate.currentDate())
         self.supp_inv_date.setCalendarPopup(True); self.supp_inv_date.setDisplayFormat("d-MMM-yy")
-        
-        root.addWidget(hdr)
+
+        # Transporter & LR No (Only for Sales)
+        self.transporter_name = SearchableComboBox()
+        self.transporter_name.addItem("Select Transporter", None)
+        try:
+            self._transporters = api.list_transports()
+        except Exception:
+            self._transporters = []
+        for t in self._transporters:
+            self.transporter_name.addItem(t["name"], t["name"])
+
+        def _create_transporter_sales():
+            from frontend.pages.transport import TransportDialog
+            dlg = TransportDialog(self)
+            if dlg.exec():
+                d = dlg.get_data()
+                try:
+                    resp = api.create_transporter(d)
+                    new_id = resp.get("id", "")
+                    new_t = {**d, "_id": new_id}
+                    self._transporters.append(new_t)
+                    return (d["name"], d["name"])
+                except Exception as ex:
+                    QMessageBox.warning(self, "Error", str(ex))
+            return None
+        wire_create_new(self.transporter_name, _create_transporter_sales)
+
+        def _edit_transporter_sales(transporter_name):
+            from frontend.pages.transport import TransportDialog
+            t = next((x for x in self._transporters if x["name"] == transporter_name), None)
+            if not t:
+                return None
+            dlg = TransportDialog(self, data=t)
+            if dlg.exec():
+                d = dlg.get_data()
+                try:
+                    api.update_transporter(t["_id"], d)
+                    t.update(d)
+                    return (d["name"], d["name"])
+                except Exception as ex:
+                    QMessageBox.warning(self, "Error", str(ex))
+            return None
+        wire_edit_selected(self.transporter_name, _edit_transporter_sales)
+
+        self.lr_no = QLineEdit()
+        self.lr_no.setPlaceholderText("LR No.")
+
         # Party + Ledger
         grid = QGridLayout()
         grid.setContentsMargins(0,6,0,6)
@@ -561,7 +600,11 @@ QToolButton#qt_calendar_nextmonth {
             party_label, ledger_label = "Party A/c Name", "Ledger Account"
         
         r = 0
-        self.party_cb = SearchableComboBox(); self.party_cb.setMinimumWidth(280)
+        grid.addWidget(QLabel("Date:"), r, 0)
+        grid.addWidget(self.date_edit, r, 1)
+        r += 1
+
+        self.party_cb = SearchableComboBox(); self.party_cb.setMinimumWidth(380)
         self.party_cb.addItem(f"Select {party_label}", None)
         for l in self._ledgers:
             g_id = str(l.get("group", ""))
@@ -580,14 +623,14 @@ QToolButton#qt_calendar_nextmonth {
             if show:
                 self.party_cb.addItem(l["name"], l["_id"])
 
-        self.party_cb.currentIndexChanged.connect(lambda i: self._show_bal(i, self.party_bal))
+        self.party_cb.currentIndexChanged.connect(self._on_party_changed)
         grid.addWidget(QLabel(f"{party_label}:"), r, 0)
         grid.addWidget(self.party_cb, r, 1)
         self.party_bal = QLabel(""); self.party_bal.setStyleSheet("color:#1565C0;font-style:italic;font-size:11px;")
         grid.addWidget(self.party_bal, r, 2)
         r += 1
 
-        self.ledger_cb = SearchableComboBox(); self.ledger_cb.setMinimumWidth(280)
+        self.ledger_cb = SearchableComboBox(); self.ledger_cb.setMinimumWidth(380)
         self.ledger_cb.addItem(f"Select {ledger_label}", None)
         for l in self._ledgers:
             g_id = str(l.get("group", ""))
@@ -617,20 +660,41 @@ QToolButton#qt_calendar_nextmonth {
             grid.addWidget(self.supp_inv_date, r, 1)
             r += 1
             # Tax Type Dropdown
-            grid.addWidget(QLabel("Tax Type:"), r, 0)
+            self.tax_type_label = QLabel("Tax Type:")
+            grid.addWidget(self.tax_type_label, r, 0)
             self.tax_type_cb = SearchableComboBox()
             self.tax_type_cb.addItems(["Exclusive", "Inclusive"])
             self.tax_type_cb.setCurrentText("Exclusive")
             self.tax_type_cb.currentIndexChanged.connect(self._on_tax_type_changed)
             grid.addWidget(self.tax_type_cb, r, 1)
+            self.tax_type_label.hide()
+            self.tax_type_cb.hide()
             r += 1
-        else:
+            self.transporter_name.hide()
+            self.lr_no.hide()
+        elif vtype == "Sales":
+            grid.addWidget(QLabel("Transporter Name:"), r, 0)
+            grid.addWidget(self.transporter_name, r, 1)
+            r += 1
+            grid.addWidget(QLabel("LR No:"), r, 0)
+            grid.addWidget(self.lr_no, r, 1)
+            r += 1
             self.supp_inv_no.hide()
             self.supp_inv_date.hide()
             self.tax_type_cb = SearchableComboBox()
             self.tax_type_cb.addItems(["Exclusive", "Inclusive"])
             self.tax_type_cb.setCurrentText("Exclusive")
             self.tax_type_cb.hide()
+        else:
+            self.supp_inv_no.hide()
+            self.supp_inv_date.hide()
+            self.transporter_name.hide()
+            self.lr_no.hide()
+            self.tax_type_cb = SearchableComboBox()
+            self.tax_type_cb.addItems(["Exclusive", "Inclusive"])
+            self.tax_type_cb.setCurrentText("Exclusive")
+            self.tax_type_cb.hide()
+
 
         # "Create New Ledger" option for both party and ledger combos
         def _make_ledger_creator(target_combo):
@@ -641,16 +705,22 @@ QToolButton#qt_calendar_nextmonth {
                 except Exception:
                     groups = []
                 dlg = LedgerDialog(self, groups)
+                res = None
                 if dlg.exec():
                     data = dlg.get_data()
                     try:
                         resp = api.create_ledger(data)
-                        new_l = {"_id": resp.get("id", ""), "name": data["name"]}
+                        new_l = {
+                            **data,
+                            "_id": resp.get("id", ""),
+                        }
                         self._ledgers.append(new_l)
-                        return (data["name"], new_l["_id"])
+                        res = (data["name"], new_l["_id"])
                     except Exception as ex:
                         QMessageBox.warning(self, "Error", str(ex))
-                return None
+                if self.vtype == "Sales":
+                    self._refresh_transporters()
+                return res
             return _create_ledger
         wire_create_new(self.party_cb,  _make_ledger_creator(self.party_cb))
         wire_create_new(self.ledger_cb, _make_ledger_creator(self.ledger_cb))
@@ -670,6 +740,7 @@ QToolButton#qt_calendar_nextmonth {
                 except Exception:
                     groups = []
                 dlg = LedgerDialog(self, groups, data=ledger)
+                res = None
                 if dlg.exec():
                     data = dlg.get_data()
                     try:
@@ -679,15 +750,18 @@ QToolButton#qt_calendar_nextmonth {
                             if l["_id"] == ledger_id:
                                 self._ledgers[i] = updated
                                 break
-                        return (data["name"], ledger_id)
+                        res = (data["name"], ledger_id)
                     except Exception as ex:
                         QMessageBox.warning(self, "Error", str(ex))
-                return None
+                if self.vtype == "Sales":
+                    self._refresh_transporters()
+                return res
             return _edit_ledger
 
         wire_edit_selected(self.party_cb,  _make_ledger_editor(self.party_cb))
         wire_edit_selected(self.ledger_cb, _make_ledger_editor(self.ledger_cb))
         root.addLayout(grid)
+        root.addSpacing(15)
         # Items
         items_hdr = QHBoxLayout()
         items_lbl = QLabel("Items")
@@ -803,12 +877,15 @@ QToolButton#qt_calendar_nextmonth {
         btns.accepted.connect(self._on_accept); btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
-        # Enter nav: date → party → ledger → [supp_inv_no → supp_inv_date → tax_type] → submit
+        # Enter nav: date → party → ledger → [supp_inv_no → supp_inv_date → tax_type] or [transporter_name → lr_no] → submit
         nav_widgets = [self.date_edit, self.party_cb, self.ledger_cb]
         if vtype == "Purchase":
             nav_widgets.extend([self.supp_inv_no, self.supp_inv_date, self.tax_type_cb])
+        elif vtype == "Sales":
+            nav_widgets.extend([self.transporter_name, self.lr_no])
         
-        setup_enter_nav(self, nav_widgets)
+        setup_enter_nav(self, nav_widgets, accept_callback=self.add_item_btn.setFocus)
+
         self._refresh_totals()
 
         # ── Pre-populate when editing ──────────────────────────────────────────
@@ -846,6 +923,10 @@ QToolButton#qt_calendar_nextmonth {
                         d = QDate.fromString(sd, Qt.DateFormat.ISODate)
                     if d.isValid():
                         self.supp_inv_date.setDate(d)
+        elif self.vtype == "Sales":
+            self.transporter_name.setCurrentText(str(meta.get("transporter_name", "")))
+            self.lr_no.setText(str(meta.get("lr_no", "")))
+
 
         # Restore Tax Type
         tt = meta.get("tax_type", "Exclusive")
@@ -864,7 +945,10 @@ QToolButton#qt_calendar_nextmonth {
             party_entry  = next((e for e in items if e["dr_cr"] == "Cr" and e != ledger_entry), None)
 
         if party_entry:
+            self.party_cb.blockSignals(True)
             self.party_cb.setCurrentData(party_entry["ledger_id"])
+            self.party_cb.blockSignals(False)
+            self._show_bal(self.party_cb.currentIndex(), self.party_bal)
         if ledger_entry:
             self.ledger_cb.setCurrentData(ledger_entry["ledger_id"])
 
@@ -973,10 +1057,8 @@ QToolButton#qt_calendar_nextmonth {
                 try:
                     resp = api.create_ledger(data)
                     new_l = {
+                        **data,
                         "_id":      resp.get("id", ""),
-                        "name":     data["name"],
-                        "group":    data.get("group", ""),
-                        "tax_rate": data.get("tax_rate", 0.0),
                     }
                     self._ledgers.append(new_l)
                     # data["group"] is now a group _id string
@@ -1150,6 +1232,11 @@ QToolButton#qt_calendar_nextmonth {
 
     def _rewire_nav(self):
         widgets = [self.date_edit, self.party_cb, self.ledger_cb]
+        if self.vtype == "Purchase":
+            widgets.extend([self.supp_inv_no, self.supp_inv_date, self.tax_type_cb])
+        elif self.vtype == "Sales":
+            widgets.extend([self.transporter_name, self.lr_no])
+            
         for row in self._tax_rows:
             widgets.append(row["ledger_cb"])
             widgets.append(row["rate_spin"])
@@ -1255,9 +1342,52 @@ QToolButton#qt_calendar_nextmonth {
                 ledger = next((l for l in self._ledgers if l["_id"] == ledger_id), None)
             
             self._party_state = ledger.get("state", "").strip().lower() if ledger else ""
+
+            # Auto-select the transporter for this ledger
+            if self.vtype == "Sales":
+                transporter_id = ledger.get("transporter") if ledger else None
+                if transporter_id:
+                    transporter_name = next((t["name"] for t in self._transporters if str(t["_id"]) == str(transporter_id)), None)
+                    if transporter_name:
+                        self.transporter_name.setCurrentText(transporter_name)
+                    else:
+                        self.transporter_name.setCurrentIndex(0)
+                else:
+                    self.transporter_name.setCurrentIndex(0)
         else:
             self._party_state = ""
+            if self.vtype == "Sales":
+                self.transporter_name.setCurrentIndex(0)
         self._refresh_totals()
+
+    def _refresh_transporters(self):
+        try:
+            self._transporters = api.list_transports()
+            self.transporter_name.blockSignals(True)
+            current_val = self.transporter_name.currentData() or self.transporter_name.currentText()
+            
+            # Rebuild the combobox items while preserving the "Create New..." sentinel
+            while self.transporter_name.count() > 1:
+                self.transporter_name.removeItem(0)
+                
+            self.transporter_name.insertItem(0, "Select Transporter", None)
+            
+            for t in self._transporters:
+                pos = self.transporter_name.count() - 1
+                self.transporter_name.insertItem(pos, t["name"], t["name"])
+                
+            if current_val:
+                idx = self.transporter_name.findText(current_val)
+                if idx >= 0:
+                    self.transporter_name.setCurrentIndex(idx)
+                else:
+                    self.transporter_name.setCurrentIndex(0)
+            else:
+                self.transporter_name.setCurrentIndex(0)
+                
+            self.transporter_name.blockSignals(False)
+        except Exception as e:
+            print(f"Error refreshing transporters: {e}")
 
     def _on_tax_type_changed(self):
         tax_type = self.tax_type_cb.currentText()
@@ -1502,13 +1632,81 @@ QToolButton#qt_calendar_nextmonth {
             if l_id:
                 try:
                     bal = api.ledger_balance(l_id)
-                    label.setText(f"Bal: {format_indian_number(bal['balance'])} {bal['type']}")
+                    bal_text = f"Bal: {format_indian_number(bal['balance'])} {bal['type']}"
+                    if self.vtype in ("Sales", "Purchase"):
+                        ledger = next((l for l in self._ledgers if str(l["_id"]) == str(l_id)), None)
+                        if not ledger or "gst_no" not in ledger:
+                            try:
+                                ledger = api.get_ledger(l_id)
+                            except Exception:
+                                pass
+                        if ledger:
+                            extra_info = []
+                            gst = ledger.get("gst_no", "").strip()
+                            state = ledger.get("state", "").strip()
+                            phone = ledger.get("phone", "").strip()
+                            if gst:
+                                extra_info.append(f"GST: {gst}")
+                            if state:
+                                extra_info.append(f"State: {state}")
+                            if phone:
+                                extra_info.append(f"Phone: {phone}")
+                            if extra_info:
+                                bal_text += " | " + " | ".join(extra_info)
+                    label.setText(bal_text)
                 except Exception:
                     label.setText("")
             else:
                 label.setText("")
 
+    def _on_party_changed(self, idx):
+        self._show_bal(idx, self.party_bal)
+        if self.vtype == "Sales" and idx > 0:
+            ledger_id = self.party_cb.itemData(idx)
+            ledger = next((l for l in self._ledgers if str(l["_id"]) == str(ledger_id)), None)
+            if ledger:
+                transporter_id = ledger.get("transporter")
+                if transporter_id:
+                    transporter = next((t for t in self._transporters if str(t["_id"]) == str(transporter_id)), None)
+                    if transporter:
+                        for i in range(self.transporter_name.count()):
+                            if self.transporter_name.itemText(i) == transporter["name"]:
+                                self.transporter_name.setCurrentIndex(i)
+                                break
+                else:
+                    self.transporter_name.setCurrentIndex(0)
+
     def _on_accept(self):
+        # Party A/c Name Validation
+        party_id = self.party_cb.currentData()
+        if not party_id:
+            if self.vtype == "Sales":
+                lbl = "Party A/c Name (Debtor)"
+            elif self.vtype == "Purchase":
+                lbl = "Party A/c Name (Creditor)"
+            elif self.vtype == "Credit Note":
+                lbl = "Party A/c Name (Customer)"
+            elif self.vtype == "Debit Note":
+                lbl = "Party A/c Name (Supplier)"
+            else:
+                lbl = "Party A/c Name"
+            QMessageBox.warning(self, "Validation Error", f"Please select a {lbl}."); return
+
+        # Ledger Validation
+        ledger_id = self.ledger_cb.currentData()
+        if not ledger_id:
+            if self.vtype == "Sales":
+                lbl = "Sales Ledger"
+            elif self.vtype == "Purchase":
+                lbl = "Purchase Ledger"
+            elif self.vtype == "Credit Note":
+                lbl = "Sales Return Ledger"
+            elif self.vtype == "Debit Note":
+                lbl = "Purchase Return Ledger"
+            else:
+                lbl = "Ledger Account"
+            QMessageBox.warning(self, "Validation Error", f"Please select a {lbl}."); return
+
         items = self._invoice_items
         if not items:
             QMessageBox.warning(self, "Error", "Add at least one item with Qty > 0"); return
@@ -1597,6 +1795,10 @@ QToolButton#qt_calendar_nextmonth {
         if self.vtype == "Purchase":
             metadata["supplier_inv_no"] = self.supp_inv_no.text().strip()
             metadata["supplier_inv_date"] = self.supp_inv_date.date().toString("yyyy-MM-dd")
+        elif self.vtype == "Sales":
+            metadata["transporter_name"] = self.transporter_name.currentText().strip() if not self.transporter_name.currentText().startswith("Select") else ""
+            metadata["lr_no"] = self.lr_no.text().strip()
+
 
         return {
             "voucher_type": self.vtype, "date": date_str,

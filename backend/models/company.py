@@ -18,6 +18,7 @@ class Company(Document):
     ifsc_code        = StringField(default="")
     branch_name      = StringField(default="")
     account_number   = StringField(default="")
+    db_name          = StringField(default="")
     created_at       = DateTimeField(default=datetime.utcnow)
     updated_at       = DateTimeField()
 
@@ -41,12 +42,34 @@ def _to_dict(c: Company) -> dict:
         "ifsc_code":       c.ifsc_code or "",
         "branch_name":     c.branch_name or "",
         "account_number":  c.account_number or "",
+        "db_name":         c.db_name or "",
     }
 
 
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 def create_company(data: dict) -> str:
     from backend.database import company_data_context
+    import re
+
+    # Generate db_name: company_name + financial_year
+    fy_start = data.get("fiscal_year_from", "").split("-")[0] if data.get("fiscal_year_from") else ""
+    fy_end = data.get("fiscal_year_to", "").split("-")[0] if data.get("fiscal_year_to") else ""
+    fy_suffix = f"_{fy_start}_{fy_end}" if fy_start and fy_end else f"_{fy_start}" if fy_start else ""
+    raw_name = f"{data['name']}{fy_suffix}"
+    
+    # Replace non-alphanumeric (except underscore) with underscore
+    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name)
+    sanitized = re.sub(r'_+', '_', sanitized)
+    base_db_name = sanitized.strip('_')
+    if not base_db_name:
+        base_db_name = "company"
+        
+    db_name = base_db_name
+    counter = 1
+    # Check for conflicts in existing companies
+    while Company.objects(db_name=db_name).first() is not None:
+        db_name = f"{base_db_name}_{counter}"
+        counter += 1
 
     c = Company(
         name=data["name"],
@@ -62,12 +85,12 @@ def create_company(data: dict) -> str:
         ifsc_code=data.get("ifsc_code", ""),
         branch_name=data.get("branch_name", ""),
         account_number=data.get("account_number", ""),
+        db_name=db_name,
     )
     c.save()
     with company_data_context(str(c.id)):
         pass
     return str(c.id)
-
 
 def get_all_companies() -> list:
     return [_to_dict(c) for c in Company.objects.all()]

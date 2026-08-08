@@ -30,21 +30,34 @@ from frontend.pages.import_purchase import ImportPurchaseVoucherDialog
 from frontend.pages.import_payment import ImportPaymentReceiptDialog
 from frontend.pages.gstr_report import GSTRReportPage
 from frontend.pages.user_management import UserManagementPage
+from frontend.pages.invoice_signature import InvoiceSignaturePage
+from frontend.pages.transport import TransportPage
+from frontend.pages.stock_report import (
+    StockGroupSummaryPage, StockCategorySummaryPage,
+    StockMonthlySummaryPage, StockVouchersPage, StockQueryPage
+)
 
 # Page title / breadcrumb map (index → (title, breadcrumb))
 _PAGE_META = {
-    0: ("Dashboard",        "Home"),
-    1: ("Companies",        "Home  ›  Companies"),
-    2: ("Ledgers",          "Home  ›  Ledgers"),
-    3: ("Voucher Entry",    "Home  ›  Voucher Entry"),
-    4: ("Trial Balance",    "Reports  ›  Trial Balance"),
-    5: ("Profit & Loss",    "Reports  ›  Profit & Loss"),
-    6: ("Ledger Statement", "Reports  ›  Ledger Statement"),
-    7: ("Inventory",        "Home  ›  Inventory"),
-    8: ("Balance Sheet",    "Reports  ›  Balance Sheet"),
-    9: ("GSTR Report",      "Reports  ›  GSTR Report"),
-    10: ("Settings",         "Home  ›  Settings"),
-    11: ("User Management", "Home  ›  User Management"),
+    0: ("Dashboard",         "Home"),
+    1: ("Companies",         "Home  ›  Companies"),
+    2: ("Ledgers",           "Masters  ›  Ledgers"),
+    3: ("Voucher Entry",     "Home  ›  Voucher Entry"),
+    4: ("Trial Balance",     "Reports  ›  Trial Balance"),
+    5: ("Profit & Loss",     "Reports  ›  Profit & Loss"),
+    6: ("Ledger Statement",  "Reports  ›  Ledger Statement"),
+    7: ("Inventory",         "Masters  ›  Inventory"),
+    8: ("Balance Sheet",     "Reports  ›  Balance Sheet"),
+    9: ("GSTR Report",       "Reports  ›  GSTR Report"),
+    10: ("Backup",            "Settings  ›  Backup"),
+    11: ("User Management",   "Settings  ›  User Management"),
+    12: ("Invoice Signature", "Settings  ›  Invoice Signature"),
+    13: ("Transporters",      "Masters  ›  Transporters"),
+    14: ("Stock Group Summary",    "Reports  ›  Stock Group Summary"),
+    15: ("Stock Category Summary", "Reports  ›  Stock Category Summary"),
+    16: ("Stock Monthly Summary",  "Reports  ›  Stock Monthly Summary"),
+    17: ("Stock Vouchers",         "Reports  ›  Stock Vouchers"),
+    18: ("Stock Query",            "Reports  ›  Stock Query"),
 }
 
 
@@ -60,6 +73,7 @@ class MainWindow(QMainWindow):
         self.refresh_company_header()
         self.sidebar.refresh_permissions()
         self._start_heartbeat()
+        self._load_db_info()
         
         self.header.logout_requested.connect(self._on_logout_click)
 
@@ -141,6 +155,13 @@ class MainWindow(QMainWindow):
             GSTRReportPage(),
             SettingsPage(),
             UserManagementPage(),
+            InvoiceSignaturePage(),
+            TransportPage(),
+            StockGroupSummaryPage(),
+            StockCategorySummaryPage(),
+            StockMonthlySummaryPage(),
+            StockVouchersPage(),
+            StockQueryPage(),
         ]
         for p in self.page_list:
             self.pages.addWidget(p)
@@ -172,6 +193,12 @@ class MainWindow(QMainWindow):
         self._status_bar.addWidget(self._co_lbl, 1)
         self._status_bar.addPermanentWidget(self._fy_icon)
         self._status_bar.addPermanentWidget(self._fy_lbl)
+
+        self._db_icon = QLabel()
+        self._db_lbl = QLabel("")
+        self._db_icon.setPixmap(get_icon("frontend/assets/icons/database.svg", THEME['text_secondary']).pixmap(16, 16))
+        self._status_bar.addPermanentWidget(self._db_icon)
+        self._status_bar.addPermanentWidget(self._db_lbl)
 
         # Initial header page
         self._on_nav_changed(0)
@@ -255,8 +282,26 @@ class MainWindow(QMainWindow):
         sc_import_r = QShortcut(QKeySequence("Ctrl+Alt+R"), self)
         sc_import_r.activated.connect(self.open_import_payment)
 
+    def _should_navigate(self) -> bool:
+        from PySide6.QtWidgets import QApplication, QDialog
+        active_win = QApplication.activeWindow()
+        if isinstance(active_win, QDialog):
+            return False
+            
+        focused = QApplication.focusWidget()
+        if focused:
+            from frontend.utils import SearchableComboBox
+            obj = focused
+            while obj:
+                if isinstance(obj, SearchableComboBox) or obj.__class__.__name__ == "_SearchPopup":
+                    return False
+                obj = obj.parent()
+        return True
+
     # ──────────────────────────────────────────────────────────────────
     def _navigate_to(self, index: int):
+        if not self._should_navigate():
+            return
         self.sidebar.select_page(index)
         self.pages.setCurrentIndex(index)
         title, bc = _PAGE_META.get(index, ("", "Home"))
@@ -396,3 +441,16 @@ class MainWindow(QMainWindow):
         else:
             self._fy_lbl.setText("")
             self._fy_icon.setVisible(False)
+
+    def _load_db_info(self):
+        try:
+            info = api.get_db_info()
+            db_path = info.get("db_path", "")
+            mongo_uri = info.get("mongo_uri", "")
+            
+            if "localhost" in mongo_uri or "127.0.0.1" in mongo_uri:
+                self._db_lbl.setText(f" DB Path: {db_path}")
+            else:
+                self._db_lbl.setText(f" DB: {mongo_uri}")
+        except Exception:
+            self._db_lbl.setText(" DB: Disconnected")

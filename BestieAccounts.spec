@@ -1,16 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('.env', '.'), ('frontend/images', 'frontend/images'), ('frontend/assets', 'frontend/assets')]
+binaries = []
+hiddenimports = ['openpyxl', 'pandas']
+tmp_ret = collect_all('PySide6')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('.env', '.'), ('frontend/images', 'frontend/images'), ('frontend/assets', 'frontend/assets')],
-    hiddenimports=['openpyxl', 'pandas'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['scipy', 'matplotlib', 'torch', 'tensorflow', 'easyocr', 'pytesseract', 'cv2', 'onnxruntime', 'mediapipe'],
     noarchive=False,
     optimize=0,
 )

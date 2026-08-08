@@ -11,8 +11,13 @@ import os
 
 os.environ.setdefault("FLASK_PORT", "5050")
 
-from dotenv import load_dotenv
-load_dotenv()
+from backend.config import load_env
+load_env()
+
+# Move PySide6 imports to top level to ensure PyInstaller bundles them correctly
+from PySide6.QtWidgets import QApplication, QSplashScreen, QMessageBox, QDialog
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap, QColor, QPainter, QFont
 
 
 def _parse_mongo_port() -> int:
@@ -48,10 +53,6 @@ def main():
     mongo_port = _parse_mongo_port()
 
     # ── PySide6 app must run in main thread ──────────────────────────────────
-    from PySide6.QtWidgets import QApplication, QSplashScreen, QMessageBox, QDialog
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QPixmap, QColor, QPainter, QFont
-
     # Required for QtWebEngine (used in PDF viewer)
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
@@ -107,22 +108,34 @@ def main():
         except Exception as e:
             print(f"Firewall setup error: {e}")
 
-        # Ensure MongoDB is running
-        update_splash(f"Checking MongoDB on port {mongo_port}...")
-        from backend.mongo_manager import ensure_mongodb_running
-        mongo_ok = ensure_mongodb_running(port=mongo_port, status_callback=update_splash)
+        # Prompt for Database Path first
+        splash.hide()
+        from frontend.db_path_dialog import DbPathDialog
+        dlg = DbPathDialog(retry_mode=False)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+        splash.show()
 
-        if not mongo_ok:
-            QMessageBox.critical(
-                None,
-                "MongoDB Error",
-                f"Could not start MongoDB on port {mongo_port}.\n\n"
-                "Please ensure:\n"
-                "  • MongoDB is installed\n"
-                "  • OR update MONGO_URI in .env to the correct port\n\n"
-                "Check logs\\mongod.log for details.",
-            )
-            sys.exit(1)
+        # Ensure MongoDB is running
+        from backend.mongo_manager import ensure_mongodb_running
+        while True:
+            update_splash(f"Checking MongoDB on port {mongo_port}...")
+            mongo_ok = ensure_mongodb_running(port=mongo_port, status_callback=update_splash)
+            if mongo_ok:
+                break
+
+            splash.hide()
+            dlg = DbPathDialog(retry_mode=True)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                splash.show()
+                # reload environment settings
+                from backend.config import load_env
+                load_env()
+                import backend.mongo_manager as mm
+                mm.DATA_DIR = os.getenv("MONGO_DBPATH", mm.DATA_DIR)
+                continue
+            else:
+                sys.exit(0)
 
         # Start Flask backend
         update_splash("Starting backend server...")

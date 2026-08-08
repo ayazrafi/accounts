@@ -26,32 +26,84 @@ import frontend.session as session
 #  Nav item definition
 # ────────────────────────────────────────────────────
 NAV_ITEMS: list[dict] = [
-    {"icon": "frontend/assets/icons/home.svg", "label": "Dashboard", "hint": ""},
-    {"icon": "frontend/assets/icons/company.svg", "label": "Companies", "hint": "Alt+C opens New"},
-    {"icon": "frontend/assets/icons/book.svg", "label": "Ledgers", "hint": ""},
     {
-        "icon": "frontend/assets/icons/edit-file.svg", 
-        "label": "Voucher Entry", 
-        "hint": "Alt+V",
-        "sub_items": [
-            "Contra", "Journal", "Payment", "Receipt", "Sales", "Purchase", "Debit Note", "Credit Note"
-        ]
+        "icon": "frontend/assets/icons/home.svg",
+        "label": "Dashboard",
+        "hint": "",
+        "page_index": 0
     },
-    {"icon": "frontend/assets/icons/bar-chart.svg", "label": "Trial Balance", "hint": ""},
-    {"icon": "frontend/assets/icons/pie-chart.svg", "label": "Profit & Loss", "hint": ""},
-    {"icon": "frontend/assets/icons/file-text.svg", "label": "Ledger Statement", "hint": ""},
-    {"icon": "frontend/assets/icons/package.svg", "label": "Inventory", "hint": ""},
-    {"icon": "frontend/assets/icons/layers.svg", "label": "Balance Sheet", "hint": ""},
     {
-        "icon": "frontend/assets/icons/file-invoice.svg", 
-        "label": "GSTR Report", 
+        "icon": "frontend/assets/icons/company.svg",
+        "label": "Companies",
+        "hint": "Alt+C opens New",
+        "page_index": 1
+    },
+    {
+        "icon": "frontend/assets/icons/book.svg",
+        "label": "Masters",
         "hint": "",
         "sub_items": [
-            "GSTR-1", "GSTR-3B", "GST Summary"
+            {"label": "Ledgers", "page_index": 2},
+            {"label": "Inventory", "page_index": 7},
+            {"label": "Transporters", "page_index": 13}
         ]
     },
-    {"icon": "frontend/assets/icons/settings.svg", "label": "Settings", "hint": ""},
-    {"icon": "frontend/assets/icons/user.svg", "label": "User Management", "hint": ""},
+    {
+        "icon": "frontend/assets/icons/edit-file.svg",
+        "label": "Voucher Entry",
+        "hint": "Alt+V",
+        "page_index": 3,
+        "sub_items": [
+            {"label": "Contra", "action": "voucher"},
+            {"label": "Journal", "action": "voucher"},
+            {"label": "Payment", "action": "voucher"},
+            {"label": "Receipt", "action": "voucher"},
+            {"label": "Sales", "action": "voucher"},
+            {"label": "Purchase", "action": "voucher"},
+            {"label": "Debit Note", "action": "voucher"},
+            {"label": "Credit Note", "action": "voucher"}
+        ]
+    },
+    {
+        "icon": "frontend/assets/icons/bar-chart.svg",
+        "label": "Reports",
+        "hint": "",
+        "sub_items": [
+            {"label": "Trial Balance", "page_index": 4},
+            {"label": "Profit & Loss", "page_index": 5},
+            {"label": "Ledger Statement", "page_index": 6},
+            {"label": "Balance Sheet", "page_index": 8},
+            {"label": "Stock Group Summary", "page_index": 14},
+            {"label": "Stock Category Summary", "page_index": 15},
+            {"label": "Stock Monthly Summary", "page_index": 16},
+            {"label": "Stock Vouchers", "page_index": 17},
+            {"label": "Stock Query", "page_index": 18}
+        ]
+    },
+    {
+        "icon": "frontend/assets/icons/file-invoice.svg",
+        "label": "GSTR Report",
+        "hint": "",
+        "page_index": 9,
+        "sub_items": [
+            {"label": "GSTR-1", "action": "gstr"},
+            {"label": "GSTR-3B", "action": "gstr"},
+            {"label": "GST Summary", "action": "gstr"}
+        ]
+    },
+    {
+        "icon": "frontend/assets/icons/settings.svg",
+        "label": "Settings",
+        "hint": "",
+        "sub_items": [
+            {"label": "Backup", "page_index": 10},
+            {"label": "User Management", "page_index": 11},
+            {"label": "Invoice Signature", "page_index": 12},
+            {"label": "Import Sales", "action": "import_sales"},
+            {"label": "Import Purchase", "action": "import_purchase"},
+            {"label": "Import Pay/Rec", "action": "import_payment"}
+        ]
+    }
 ]
 
 
@@ -143,6 +195,10 @@ class Sidebar(QFrame):
         self._compact_w   = THEME["sidebar_compact_width"]
         self._anim_dur    = 220          # ms
         self._nav_buttons: list[_NavButton] = []
+        self._import_sales_btn = None
+        self._import_purchase_btn = None
+        self._import_payment_btn = None
+        self._page_to_nav_item = {}
 
         self.setFixedWidth(self._expanded_w)
         self._build()
@@ -201,22 +257,30 @@ class Sidebar(QFrame):
         nav_layout.setContentsMargins(0, 8, 0, 8)
         nav_layout.setSpacing(2)
 
+        self._page_to_nav_item = {}
+
         for idx, item in enumerate(NAV_ITEMS):
             icon, label, hint = item["icon"], item["label"], item.get("hint", "")
             has_sub = "sub_items" in item
             btn = _NavButton(icon, label, hint, idx, has_sub=has_sub)
             
-            # RBAC: Hide restricted items
-            if label in ["Companies", "User Management"] and not session.is_super_admin:
-                btn.setVisible(False)
-            else:
-                nav_layout.addWidget(btn)
-                
+            # Save page index mapping for top level items
+            page_idx = item.get("page_index", -1)
+            btn._page_index = page_idx
+            
+            if page_idx >= 0 and not has_sub:
+                self._page_to_nav_item[page_idx] = {"btn": btn}
+            
+            nav_layout.addWidget(btn)
             self._nav_buttons.append(btn)
 
-            # Handle sub-items (e.g. Voucher Entry)
+            # Handle sub-items
             if has_sub:
-                btn.clicked.connect(lambda checked=False, i=idx: self._on_nav_click_with_sub(i))
+                if page_idx >= 0:
+                    self._page_to_nav_item[page_idx] = {"btn": btn}
+                    
+                btn.clicked.connect(lambda checked=False, i=idx: self._on_nav_click(i))
+                
                 sub_container = QWidget()
                 sub_container.setObjectName("SubContainer")
                 sub_container.setVisible(False)
@@ -225,39 +289,38 @@ class Sidebar(QFrame):
                 sub_lay.setSpacing(1)
                 
                 btn._sub_buttons_map = {}
-                for sub_label in item["sub_items"]:
+                for sub_item in item["sub_items"]:
+                    sub_label = sub_item["label"]
                     sub_btn = QPushButton(f"{sub_label}")
                     sub_btn.setObjectName("subNavItem")
                     sub_btn.setFixedHeight(30)
                     sub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     sub_btn.setStyleSheet(self._sub_nav_style())
-                    sub_btn.clicked.connect(lambda checked=False, l=sub_label: self._on_sub_nav_click(l))
+                    
+                    is_nav_action = "page_index" in sub_item or sub_item.get("action") in ["voucher", "gstr"]
+                    if is_nav_action:
+                        sub_btn.setCheckable(True)
+                    
+                    sub_btn.clicked.connect(lambda checked=False, s=sub_item: self._on_sub_nav_click(s))
                     sub_lay.addWidget(sub_btn)
                     btn._sub_buttons_map[sub_label] = sub_btn
+                    
+                    sub_page_idx = sub_item.get("page_index", -1)
+                    if sub_page_idx >= 0:
+                        self._page_to_nav_item[sub_page_idx] = {"parent": btn, "sub_btn": sub_btn}
+                        
+                    action = sub_item.get("action")
+                    if action == "import_sales":
+                        self._import_sales_btn = sub_btn
+                    elif action == "import_purchase":
+                        self._import_purchase_btn = sub_btn
+                    elif action == "import_payment":
+                        self._import_payment_btn = sub_btn
                 
                 nav_layout.addWidget(sub_container)
                 btn._sub_container = sub_container
             else:
                 btn.clicked.connect(lambda checked=False, i=idx: self._on_nav_click(i))
-
-        nav_layout.addSpacing(10)
-        import_btn = _NavButton("frontend/assets/icons/upload.svg", "Import Sales", "Ctrl+Alt+I", -1)
-        import_btn.clicked.connect(self.import_requested.emit)
-        nav_layout.addWidget(import_btn)
-        self._nav_buttons.append(import_btn)
-        self._import_sales_btn = import_btn
-
-        import_p_btn = _NavButton("frontend/assets/icons/download.svg", "Import Purchase", "Ctrl+Alt+P", -1)
-        import_p_btn.clicked.connect(self.import_purchase_requested.emit)
-        nav_layout.addWidget(import_p_btn)
-        self._nav_buttons.append(import_p_btn)
-        self._import_purchase_btn = import_p_btn
-
-        import_pr_btn = _NavButton("frontend/assets/icons/refresh-cw.svg", "Import Pay/Rec", "Ctrl+Alt+R", -1)
-        import_pr_btn.clicked.connect(self.import_payment_requested.emit)
-        nav_layout.addWidget(import_pr_btn)
-        self._nav_buttons.append(import_pr_btn)
-        self._import_payment_btn = import_pr_btn
 
         nav_layout.addStretch()
         scroll.setWidget(nav_container)
@@ -272,7 +335,8 @@ class Sidebar(QFrame):
     def clear_import_selection(self):
         """Uncheck all import shortcut buttons (called after dialog closes)."""
         for btn in (self._import_sales_btn, self._import_purchase_btn, self._import_payment_btn):
-            btn.setChecked(False)
+            if btn is not None:
+                btn.setChecked(False)
 
     def toggle(self):
         """Animate between expanded and compact mode."""
@@ -312,78 +376,204 @@ class Sidebar(QFrame):
     def refresh_permissions(self):
         """Update navigation items and sub-items visibility based on current permissions."""
         for btn in self._nav_buttons:
-            if btn._index == -1:
-                continue
             label = btn._label
-            if label in ["Companies", "User Management"]:
-                btn.setVisible(session.is_super_admin)
-            elif label == "Settings":
-                btn.setVisible(session.is_super_admin)
-            elif label == "Ledgers" or label == "Ledger Statement":
-                btn.setVisible(session.has_permission("ledger", "view"))
-            elif label == "Inventory":
-                btn.setVisible(session.has_permission("item", "view"))
-            elif label == "Dashboard":
+            
+            if label == "Dashboard":
                 btn.setVisible(True)
-            elif label == "Trial Balance" or label == "Profit & Loss" or label == "Balance Sheet":
-                btn.setVisible(session.has_permission("ledger", "view"))
-            elif label == "GSTR Report":
-                has_sales_view = session.has_permission("sales", "view")
-                has_purch_view = session.has_permission("purchase", "view")
-                btn.setVisible(has_sales_view or has_purch_view)
+                
+            elif label == "Companies":
+                btn.setVisible(session.is_super_admin)
+                
+            elif label == "Masters":
+                has_visible_child = False
+                if hasattr(btn, "_sub_buttons_map"):
+                    # Ledgers
+                    ledgers_visible = session.has_permission("ledger", "view")
+                    btn._sub_buttons_map["Ledgers"].setVisible(ledgers_visible)
+                    if ledgers_visible:
+                        has_visible_child = True
+                        
+                    # Inventory
+                    inventory_visible = session.has_permission("item", "view")
+                    btn._sub_buttons_map["Inventory"].setVisible(inventory_visible)
+                    if inventory_visible:
+                        has_visible_child = True
+                        
+                    # Transporters
+                    transporters_visible = session.has_permission("ledger", "view")
+                    btn._sub_buttons_map["Transporters"].setVisible(transporters_visible)
+                    if transporters_visible:
+                        has_visible_child = True
+                        
+                btn.setVisible(has_visible_child)
+                
             elif label == "Voucher Entry":
-                sub_visible = False
+                has_visible_child = False
                 if hasattr(btn, "_sub_buttons_map"):
                     for vtype, sub_btn in btn._sub_buttons_map.items():
                         visible = session.has_permission(vtype, "view")
                         sub_btn.setVisible(visible)
                         if visible:
-                            sub_visible = True
-                btn.setVisible(sub_visible)
+                            has_visible_child = True
+                btn.setVisible(has_visible_child)
                 
-        # Update dynamic imports visibility
-        self._import_sales_btn.setVisible(session.has_permission("sales", "edit"))
-        self._import_purchase_btn.setVisible(session.has_permission("purchase", "edit"))
-        
-        can_pay = session.has_permission("payment", "edit")
-        can_rec = session.has_permission("receipt", "edit")
-        self._import_payment_btn.setVisible(can_pay or can_rec)
+            elif label == "Reports":
+                has_visible_child = False
+                reports_visible = session.has_permission("ledger", "view")
+                if hasattr(btn, "_sub_buttons_map"):
+                    for rep_name, sub_btn in btn._sub_buttons_map.items():
+                        sub_btn.setVisible(reports_visible)
+                        if reports_visible:
+                            has_visible_child = True
+                btn.setVisible(has_visible_child)
+                
+            elif label == "GSTR Report":
+                has_sales_view = session.has_permission("sales", "view")
+                has_purch_view = session.has_permission("purchase", "view")
+                visible = has_sales_view or has_purch_view
+                btn.setVisible(visible)
+                if hasattr(btn, "_sub_buttons_map"):
+                    for sub_btn in btn._sub_buttons_map.values():
+                        sub_btn.setVisible(visible)
+                        
+            elif label == "Settings":
+                has_visible_child = False
+                if hasattr(btn, "_sub_buttons_map"):
+                    # Backup
+                    backup_visible = session.is_super_admin
+                    btn._sub_buttons_map["Backup"].setVisible(backup_visible)
+                    if backup_visible:
+                        has_visible_child = True
+                        
+                    # User Management
+                    um_visible = session.is_super_admin
+                    btn._sub_buttons_map["User Management"].setVisible(um_visible)
+                    if um_visible:
+                        has_visible_child = True
+                        
+                    # Invoice Signature
+                    is_visible = session.has_permission("settings", "view")
+                    btn._sub_buttons_map["Invoice Signature"].setVisible(is_visible)
+                    if is_visible:
+                        has_visible_child = True
+                        
+                    # Import Sales
+                    import_sales_visible = session.has_permission("sales", "edit")
+                    btn._sub_buttons_map["Import Sales"].setVisible(import_sales_visible)
+                    if import_sales_visible:
+                        has_visible_child = True
+                        
+                    # Import Purchase
+                    import_purchase_visible = session.has_permission("purchase", "edit")
+                    btn._sub_buttons_map["Import Purchase"].setVisible(import_purchase_visible)
+                    if import_purchase_visible:
+                        has_visible_child = True
+                        
+                    # Import Pay/Rec
+                    can_pay = session.has_permission("payment", "edit")
+                    can_rec = session.has_permission("receipt", "edit")
+                    import_payment_visible = can_pay or can_rec
+                    btn._sub_buttons_map["Import Pay/Rec"].setVisible(import_payment_visible)
+                    if import_payment_visible:
+                        has_visible_child = True
+                        
+                btn.setVisible(has_visible_child)
 
     def _on_company_chip_clicked(self):
         self.company_toggle_requested.emit()
 
     def select_page(self, index: int):
-        """Programmatically select a nav item (0-based)."""
-        if 0 <= index < len(self._nav_buttons):
-            self._nav_buttons[self._current_index].setChecked(False)
-            self._nav_buttons[index].setChecked(True)
-            self._current_index = index
+        """Programmatically select a nav item (0-based page index)."""
+        # Uncheck all top-level buttons and sub buttons
+        for btn in self._nav_buttons:
+            btn.setChecked(False)
+            if hasattr(btn, "_sub_buttons_map"):
+                for sub_btn in btn._sub_buttons_map.values():
+                    sub_btn.setChecked(False)
 
-    # ── private helpers ───────────────────────────────────────────────
-    def _on_nav_click(self, index: int):
-        self._nav_buttons[self._current_index].setChecked(False)
-        self._nav_buttons[index].setChecked(True)
+        if index in self._page_to_nav_item:
+            nav_info = self._page_to_nav_item[index]
+            if "btn" in nav_info:
+                # Top level item
+                btn = nav_info["btn"]
+                btn.setChecked(True)
+                if hasattr(btn, "_sub_container"):
+                    btn._sub_container.setVisible(True)
+                # Hide other sub containers
+                for other_btn in self._nav_buttons:
+                    if other_btn != btn and hasattr(other_btn, "_sub_container"):
+                        other_btn._sub_container.setVisible(False)
+            else:
+                # Sub item
+                parent = nav_info["parent"]
+                sub_btn = nav_info["sub_btn"]
+                parent.setChecked(True)
+                sub_btn.setChecked(True)
+                if hasattr(parent, "_sub_container"):
+                    parent._sub_container.setVisible(True)
+                # Hide other sub containers
+                for other_btn in self._nav_buttons:
+                    if other_btn != parent and hasattr(other_btn, "_sub_container"):
+                        other_btn._sub_container.setVisible(False)
         self._current_index = index
-        self.nav_item_changed.emit(index)
-        
-        # Hide other sub-containers, and ensure active one is visible
-        for i, btn in enumerate(self._nav_buttons):
-            if i == index:
+
+    def select_page_by_action(self, parent_label: str, sub_label: str):
+        # Uncheck all
+        for btn in self._nav_buttons:
+            btn.setChecked(False)
+            if hasattr(btn, "_sub_buttons_map"):
+                for sub_btn in btn._sub_buttons_map.values():
+                    sub_btn.setChecked(False)
+        # Check parent and specific sub item
+        for btn in self._nav_buttons:
+            if btn._label == parent_label:
+                btn.setChecked(True)
+                if hasattr(btn, "_sub_buttons_map") and sub_label in btn._sub_buttons_map:
+                    sub_btn = btn._sub_buttons_map[sub_label]
+                    sub_btn.setChecked(True)
                 if hasattr(btn, "_sub_container"):
                     btn._sub_container.setVisible(True)
             elif hasattr(btn, "_sub_container"):
                 btn._sub_container.setVisible(False)
 
-    def _on_nav_click_with_sub(self, index: int):
-        # If expanding a sub-menu, make sure sidebar is expanded
-        if not self._expanded:
-            self.toggle()
+    # ── private helpers ───────────────────────────────────────────────
+    def _on_nav_click(self, index: int):
+        btn = self._nav_buttons[index]
+        page_idx = getattr(btn, "_page_index", -1)
         
-        self._on_nav_click(index)
+        if page_idx >= 0:
+            self.nav_item_changed.emit(page_idx)
+            self.select_page(page_idx)
+        else:
+            # Accordion menu with no direct page mapping (e.g. Masters, Reports, Settings)
+            if hasattr(btn, "_sub_container"):
+                if not self._expanded:
+                    self.toggle()
+                visible = btn._sub_container.isVisible()
+                btn._sub_container.setVisible(not visible)
+            # Restore check state of category header button to match active page
+            active_info = self._page_to_nav_item.get(self._current_index, {})
+            should_be_checked = (active_info.get("parent") == btn or active_info.get("btn") == btn)
+            btn.setChecked(should_be_checked)
 
-    def _on_sub_nav_click(self, label: str):
-        if label in ["GSTR-1", "GSTR-3B", "GST Summary"]:
-            # Find GSTR Report index (which is 9)
+    def _on_sub_nav_click(self, sub_item: dict):
+        label = sub_item["label"]
+        action = sub_item.get("action")
+        page_idx = sub_item.get("page_index", -1)
+        
+        if page_idx >= 0:
+            self.nav_item_changed.emit(page_idx)
+            self.select_page(page_idx)
+        elif action == "voucher":
+            self.nav_item_changed.emit(3)
+            window = self.window()
+            if hasattr(window, "page_list"):
+                voucher_page = window.page_list[3]
+                from frontend.pages.voucher import VoucherPage
+                if isinstance(voucher_page, VoucherPage):
+                    voucher_page._open_voucher(label)
+            self.select_page_by_action("Voucher Entry", label)
+        elif action == "gstr":
             self.nav_item_changed.emit(9)
             window = self.window()
             if hasattr(window, "page_list"):
@@ -391,16 +581,13 @@ class Sidebar(QFrame):
                 from frontend.pages.gstr_report import GSTRReportPage
                 if isinstance(gstr_page, GSTRReportPage):
                     gstr_page.switch_tab(label)
-        else:
-            # Find "Voucher Entry" index (which is 3)
-            self.nav_item_changed.emit(3)
-            # Access MainWindow to call _open_voucher
-            window = self.window()
-            if hasattr(window, "page_list"):
-                voucher_page = window.page_list[3]
-                from frontend.pages.voucher import VoucherPage
-                if isinstance(voucher_page, VoucherPage):
-                    voucher_page._open_voucher(label)
+            self.select_page_by_action("GSTR Report", label)
+        elif action == "import_sales":
+            self.import_requested.emit()
+        elif action == "import_purchase":
+            self.import_purchase_requested.emit()
+        elif action == "import_payment":
+            self.import_payment_requested.emit()
 
     def _sub_nav_style(self) -> str:
         return f"""
@@ -419,6 +606,11 @@ class Sidebar(QFrame):
             }}
             QPushButton#subNavItem:pressed {{
                 background: rgba(255, 255, 255, 0.1);
+            }}
+            QPushButton#subNavItem:checked {{
+                color: #FFFFFF;
+                background: rgba(59,130,246,0.18);
+                font-weight: 600;
             }}
         """
 

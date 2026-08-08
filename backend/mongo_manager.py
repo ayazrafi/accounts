@@ -10,17 +10,19 @@ import subprocess
 import time
 import glob
 import winreg
-from dotenv import load_dotenv
+from backend.config import load_env
 
-load_dotenv()
+load_env()
 
 MONGO_PORT = int(os.getenv("MONGO_URI", "mongodb://localhost:27021/").split(":")[-1].rstrip("/"))
 
-if getattr(sys, 'frozen', False):
+if os.getenv("MONGO_DBPATH"):
+    DATA_DIR = os.getenv("MONGO_DBPATH")
+elif getattr(sys, 'frozen', False):
     # Packaged production environment - use safe local AppData folder
     DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "BestieAccounts", "db")
 else:
-    DATA_DIR = os.getenv("MONGO_DBPATH", r"C:\data\db")
+    DATA_DIR = r"C:\data\db"
 
 
 def is_port_open(host: str = "127.0.0.1", port: int = None) -> bool:
@@ -110,6 +112,7 @@ def start_mongodb(port: int = None, dbpath: str = None) -> subprocess.Popen | No
         mongod,
         "--port", str(port),
         "--dbpath", dbpath,
+        "--directoryperdb",
         "--logpath", log_file,
         "--logappend",
     ]
@@ -148,8 +151,51 @@ def ensure_mongodb_running(port: int = None, status_callback=None) -> bool:
             status_callback(msg)
 
     if is_port_open(port=port):
-        _log(f"MongoDB already running on port {port}")
-        return True
+        try:
+            from pymongo import MongoClient
+            client = MongoClient(f"mongodb://localhost:{port}/", serverSelectionTimeoutMS=1500)
+            opts = client.admin.command("getCmdLineOpts")
+            running_dbpath = opts.get("parsed", {}).get("storage", {}).get("dbPath", "")
+            running_dirperdb = opts.get("parsed", {}).get("storage", {}).get("directoryPerDB", False)
+            client.close()
+            
+            if running_dbpath:
+                correct_path = os.path.abspath(running_dbpath) == os.path.abspath(DATA_DIR)
+                correct_dirperdb = running_dirperdb is True
+                if correct_path and correct_dirperdb:
+                    _log(f"MongoDB already running on port {port} with correct path and directoryperdb enabled.")
+                    return True
+                else:
+                    reasons = []
+                    if not correct_path:
+                        reasons.append(f"configured path is '{DATA_DIR}' (running with '{running_dbpath}')")
+                    if not correct_dirperdb:
+                        reasons.append("directoryperdb is disabled")
+                    _log(f"MongoDB is running on port {port} but {', and '.join(reasons)}. Restarting MongoDB...")
+                    # Shutdown running instance
+                    client = MongoClient(f"mongodb://localhost:{port}/", serverSelectionTimeoutMS=1500)
+                    try:
+                        client.admin.command("shutdown")
+                    except Exception:
+                        pass
+                    client.close()
+                    # Wait for port to close
+                    for _ in range(15):
+                        if not is_port_open(port=port):
+                            break
+                        time.sleep(0.4)
+            else:
+                _log(f"MongoDB running on port {port} with unknown configuration. Restarting...")
+                client = MongoClient(f"mongodb://localhost:{port}/", serverSelectionTimeoutMS=1500)
+                try:
+                    client.admin.command("shutdown")
+                except Exception:
+                    pass
+                client.close()
+                time.sleep(1.5)
+        except Exception as e:
+            _log(f"MongoDB port {port} is occupied, but could not verify or shutdown: {e}")
+            return True
 
     _log(f"MongoDB not found on port {port}. Locating mongod.exe...")
     mongod_path = _find_mongod()
@@ -158,7 +204,7 @@ def ensure_mongodb_running(port: int = None, status_callback=None) -> bool:
         return False
 
     _log(f"Found: {mongod_path}")
-    _log(f"Starting MongoDB on port {port} (dbpath: {DATA_DIR})...")
+    _log(f"Starting MongoDB on port {port} (dbpath: {DATA_DIR}, directoryperdb: enabled)...")
     proc = start_mongodb(port=port)
     if proc is None:
         _log("ERROR: Failed to launch mongod process.")

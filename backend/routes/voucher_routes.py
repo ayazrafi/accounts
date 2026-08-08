@@ -67,7 +67,8 @@ def add_voucher():
             reference_type=ref_type,
             grand_total=data.get("grand_total"),
             invoice_items=data.get("invoice_items"),
-            metadata=data.get("metadata")
+            metadata=data.get("metadata"),
+            voucher_no=data.get("voucher_no") or data.get("v_no")
         )
         
         # Handle linking if provided directly to this route
@@ -223,7 +224,8 @@ def add_accounting_voucher():
             narration=data.get("narration", ""),
             entries=data["entries"],
             company_id=company_id,
-            reference_type=ref_type
+            reference_type=ref_type,
+            voucher_no=data.get("voucher_no") or data.get("v_no")
         )
         
         # Handle linking

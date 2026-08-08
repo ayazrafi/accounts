@@ -1,10 +1,10 @@
 import os
 from contextlib import ExitStack, contextmanager
-from dotenv import load_dotenv
+from backend.config import load_env
 import mongoengine
 from bson import ObjectId
 
-load_dotenv()
+load_env()
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME   = os.getenv("DB_NAME", "pro_accounts")
@@ -14,6 +14,13 @@ mongoengine.connect(db=DB_NAME, host=MONGO_URI)
 
 def company_db_name(company_id: str) -> str:
     """Return the physical MongoDB database name for one company's data."""
+    from backend.models.company import Company
+    try:
+        c = Company.objects(id=company_id).first()
+        if c and getattr(c, "db_name", None):
+            return c.db_name
+    except Exception as e:
+        print(f"Error fetching company DB name: {e}")
     return f"{DB_NAME}_company_{str(company_id).lower()}"
 
 
@@ -52,7 +59,10 @@ def ensure_company_database(company_id: str) -> str:
         "stock_categories",
         "stock_items",
         "stock_transactions",
+        "signatures",
+        "transports",
     ]
+
 
     meta = target_db["database_meta"]
     if not meta.find_one({"_id": "single_db_migration"}):
@@ -90,6 +100,8 @@ def company_data_context(company_id: str):
     )
     from backend.models.ledger import Ledger
     from backend.models.voucher import Voucher, VoucherItem, BillWiseDetail
+    from backend.models.signature import Signature
+    from backend.models.transport import Transport
 
     docs = [
         Group,
@@ -102,7 +114,10 @@ def company_data_context(company_id: str):
         Voucher,
         VoucherItem,
         BillWiseDetail,
+        Signature,
+        Transport,
     ]
+
 
     with ExitStack() as stack:
         for doc in docs:

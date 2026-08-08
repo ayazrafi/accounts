@@ -234,7 +234,9 @@ def _item_to_dict(item: StockItem, cat: StockCategory = None) -> dict:
     }
     # Fallback to category defaults if item values are 0
     if not cat and item.category:
-        cat = StockCategory.objects(id=item.category).first()
+        cid = item.category
+        if isinstance(cid, ObjectId) or (isinstance(cid, str) and ObjectId.is_valid(cid)):
+            cat = StockCategory.objects(id=ObjectId(cid)).first()
     
     if cat:
         for f in ["price", "super_net", "net", "dhara", "cgst", "sgst", "igst"]:
@@ -256,7 +258,16 @@ def get_stock_items(company_id: str = None) -> list:
     
     # Pre-fetch categories for the items to avoid N+1 queries
     cat_ids = {i.category for i in q if i.category}
-    cats_map = {str(c.id): c for c in StockCategory.objects(id__in=list(cat_ids))}
+    
+    # Filter out invalid ObjectIds to prevent Mongoengine casting crashes
+    valid_cat_ids = []
+    for cid in cat_ids:
+        if isinstance(cid, ObjectId):
+            valid_cat_ids.append(cid)
+        elif isinstance(cid, str) and ObjectId.is_valid(cid):
+            valid_cat_ids.append(ObjectId(cid))
+            
+    cats_map = {str(c.id): c for c in StockCategory.objects(id__in=valid_cat_ids)}
     
     return [_item_to_dict(i, cats_map.get(str(i.category))) for i in q]
 

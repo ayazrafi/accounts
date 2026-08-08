@@ -57,15 +57,30 @@ class VoucherItem(Document):
 # ── helpers ────────────────────────────────────────────────────────────────────
 def _next_voucher_no(voucher_type: str, company_id: str) -> str:
     prefix = voucher_type[:3].upper()
-    count  = Voucher.objects.filter(voucher_type=voucher_type, company_id=ObjectId(company_id)).count() + 1
+    vouchers = Voucher.objects.filter(voucher_type=voucher_type, company_id=ObjectId(company_id))
+    max_num = 0
+    import re
+    for v in vouchers:
+        match = re.search(r'\d+', v.voucher_no)
+        if match:
+            try:
+                num = int(match.group())
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                pass
+    count = max_num + 1
+    if voucher_type == "Sales":
+        return str(count)
     return f"{prefix}-{count:05d}"
+
 
 
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
                    company_id: str = None, reference_type: str = "",
                    grand_total: float = None, invoice_items: list = None,
-                   metadata: dict = None) -> str:
+                   metadata: dict = None, voucher_no: str = None) -> str:
     """
     entries: [{"ledger_id": str, "ledger_name": str, "dr_cr": "Dr"|"Cr", "amount": float}]
     grand_total: if provided, stored as outstanding_amount for Sales/Purchase vouchers.
@@ -76,7 +91,9 @@ def create_voucher(voucher_type: str, date: str, narration: str, entries: list,
     if abs(dr_total - cr_total) > 0.01:
         raise ValueError(f"Voucher not balanced. Dr={dr_total}, Cr={cr_total}")
 
-    voucher_no = _next_voucher_no(voucher_type, company_id)
+    if not voucher_no:
+        voucher_no = _next_voucher_no(voucher_type, company_id)
+
     now        = datetime.utcnow()
     date_obj   = datetime.strptime(date, "%Y-%m-%d")
 
@@ -179,6 +196,9 @@ def get_voucher(voucher_id: str) -> dict | None:
             "group_name":  group_map.get(str(ledgers[str(i.ledger_id)].group)) if i.ledger_id and str(i.ledger_id) in ledgers else "",
             "ledger_address": ledgers[str(i.ledger_id)].address if i.ledger_id and str(i.ledger_id) in ledgers else "",
             "ledger_gst_no":  ledgers[str(i.ledger_id)].gst_no if i.ledger_id and str(i.ledger_id) in ledgers else "",
+            "ledger_phone":   ledgers[str(i.ledger_id)].phone if i.ledger_id and str(i.ledger_id) in ledgers else "",
+            "ledger_email":   ledgers[str(i.ledger_id)].email if i.ledger_id and str(i.ledger_id) in ledgers else "",
+
         }
         for i in items
     ]

@@ -7,6 +7,9 @@ from backend.routes.report_routes import reports_bp
 from backend.routes.inventory_routes import inventory_bp
 from backend.routes.settings_routes import settings_bp
 from backend.routes.auth_routes import auth_bp
+from backend.routes.signature_routes import signature_bp
+from backend.routes.transport_routes import transport_bp
+
 
 from backend.models.group import seed_default_groups
 from backend.models.inventory import seed_defaults as seed_inventory
@@ -88,6 +91,9 @@ def create_app():
     app.register_blueprint(reports_bp)
     app.register_blueprint(inventory_bp)
     app.register_blueprint(settings_bp)
+    app.register_blueprint(signature_bp)
+    app.register_blueprint(transport_bp)
+
 
     @app.get("/api/health")
     def health():
@@ -97,8 +103,8 @@ def create_app():
 
 
 def run_server():
-    from dotenv import load_dotenv
-    load_dotenv()
+    from backend.config import load_env
+    load_env()
     seed_default_groups()
     seed_inventory()
     

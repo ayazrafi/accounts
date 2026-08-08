@@ -643,3 +643,488 @@ def gst_summary():
         }
     })
 
+
+# ── Stock Reports Endpoints ───────────────────────────────────────────────────
+
+def _get_stock_balance_as_of(company_id: str, to_date: datetime = None, stock_group_id: str = None, category_id: str = None) -> list:
+    from backend.models.inventory import StockTransaction, StockItem, StockGroup, StockUnit, StockCategory
+    
+    match = {}
+    if company_id:
+        match["company_id"] = ObjectId(company_id)
+    if to_date:
+        match["date"] = {"$lte": to_date}
+        
+    pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": "$item_id",
+            "in_qty":    {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$qty", 0]}},
+            "out_qty":   {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$qty", 0]}},
+            "in_value":  {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$value", 0]}},
+            "out_value": {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$value", 0]}},
+        }}
+    ]
+    
+    result = {str(r["_id"]): r for r in StockTransaction._get_collection().aggregate(pipeline)}
+    
+    q_items = StockItem.objects(company_id=ObjectId(company_id))
+    if stock_group_id:
+        q_items = q_items.filter(stock_group=ObjectId(stock_group_id))
+    if category_id:
+        q_items = q_items.filter(category=ObjectId(category_id))
+        
+    groups = {str(g.id): g.name for g in StockGroup.objects.all()}
+    categories = {str(c.id): c.name for c in StockCategory.objects.all()}
+    units  = {str(u.id): u.name for u in StockUnit.objects.all()}
+    
+    rows = []
+    for item in q_items:
+        iid = str(item.id)
+        txn = result.get(iid, {})
+        
+        in_qty = txn.get("in_qty", 0.0) + (item.opening_qty or 0.0)
+        out_qty = txn.get("out_qty", 0.0)
+        in_val = txn.get("in_value", 0.0) + (item.opening_value or 0.0)
+        out_val = txn.get("out_value", 0.0)
+        
+        net_qty = in_qty - out_qty
+        net_val = in_val - out_val
+        rate = (net_val / net_qty) if net_qty > 0 else (item.opening_rate or 0.0)
+        
+        rows.append({
+            "item_id": iid,
+            "name": item.name,
+            "group_id": str(item.stock_group) if item.stock_group else "",
+            "group": groups.get(str(item.stock_group), "") if item.stock_group else "",
+            "category_id": str(item.category) if item.category else "",
+            "category": categories.get(str(item.category), "") if item.category else "",
+            "unit": units.get(str(item.unit), "") if item.unit else "",
+            "hsn_code": item.hsn_sac or "",
+            "gst_rate": item.gst_rate or 0.0,
+            "qty": net_qty,
+            "rate": round(rate, 2),
+            "value": round(net_val, 2),
+        })
+    return rows
+
+
+@reports_bp.get("/stock-group-summary")
+def stock_group_summary():
+    company_id = request.args.get("company_id")
+    if not company_id:
+        return jsonify({"error": "company_id required"}), 400
+    group_id = request.args.get("group_id")
+    to_date = _parse_date(request.args.get("to"))
+    
+    rows = _get_stock_balance_as_of(company_id, to_date=to_date, stock_group_id=group_id)
+    total_value = sum(r["value"] for r in rows)
+    total_qty = sum(r["qty"] for r in rows)
+    
+    return jsonify({
+        "rows": rows,
+        "total_value": round(total_value, 2),
+        "total_qty": round(total_qty, 3)
+    })
+
+
+@reports_bp.get("/stock-category-summary")
+def stock_category_summary():
+    company_id = request.args.get("company_id")
+    if not company_id:
+        return jsonify({"error": "company_id required"}), 400
+    category_id = request.args.get("category_id")
+    to_date = _parse_date(request.args.get("to"))
+    
+    rows = _get_stock_balance_as_of(company_id, to_date=to_date, category_id=category_id)
+    total_value = sum(r["value"] for r in rows)
+    total_qty = sum(r["qty"] for r in rows)
+    
+    return jsonify({
+        "rows": rows,
+        "total_value": round(total_value, 2),
+        "total_qty": round(total_qty, 3)
+    })
+
+
+@reports_bp.get("/stock-monthly-summary")
+def stock_monthly_summary():
+    company_id = request.args.get("company_id")
+    item_id = request.args.get("item_id")
+    from_date_str = request.args.get("from")
+    to_date_str = request.args.get("to")
+    
+    if not company_id or not item_id:
+        return jsonify({"error": "company_id and item_id required"}), 400
+        
+    from backend.models.inventory import StockItem, StockTransaction, StockGroup, StockUnit
+    
+    item = StockItem.objects(id=ObjectId(item_id)).first()
+    if not item:
+        return jsonify({"error": "Item not found"}), 404
+        
+    groups = {str(g.id): g.name for g in StockGroup.objects.all()}
+    units  = {str(u.id): u.name for u in StockUnit.objects.all()}
+    
+    from_date = _parse_date(from_date_str) if from_date_str else datetime(datetime.now().year, 4, 1)
+    to_date = _parse_date(to_date_str) if to_date_str else datetime(from_date.year + 1, 3, 31)
+    
+    fy_start = from_date
+    
+    # 1. Compute opening balance before fy_start
+    match_op = {
+        "company_id": ObjectId(company_id),
+        "item_id": ObjectId(item_id),
+        "date": {"$lt": fy_start}
+    }
+    
+    pipeline_op = [
+        {"$match": match_op},
+        {"$group": {
+            "_id": None,
+            "in_qty":    {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$qty", 0]}},
+            "out_qty":   {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$qty", 0]}},
+            "in_value":  {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$value", 0]}},
+            "out_value": {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$value", 0]}},
+        }}
+    ]
+    
+    op_res = list(StockTransaction._get_collection().aggregate(pipeline_op))
+    op_tx = op_res[0] if op_res else {}
+    
+    op_qty = (item.opening_qty or 0.0) + op_tx.get("in_qty", 0.0) - op_tx.get("out_qty", 0.0)
+    op_val = (item.opening_value or 0.0) + op_tx.get("in_value", 0.0) - op_tx.get("out_value", 0.0)
+    op_rate = (op_val / op_qty) if op_qty > 0 else (item.opening_rate or 0.0)
+    
+    fy_year = fy_start.year
+    month_sequence = [
+        (fy_year, 4, "April"),
+        (fy_year, 5, "May"),
+        (fy_year, 6, "June"),
+        (fy_year, 7, "July"),
+        (fy_year, 8, "August"),
+        (fy_year, 9, "September"),
+        (fy_year, 10, "October"),
+        (fy_year, 11, "November"),
+        (fy_year, 12, "December"),
+        (fy_year + 1, 1, "January"),
+        (fy_year + 1, 2, "February"),
+        (fy_year + 1, 3, "March")
+    ]
+    
+    running_qty = op_qty
+    running_val = op_val
+    monthly_rows = []
+    
+    match_yr = {
+        "company_id": ObjectId(company_id),
+        "item_id": ObjectId(item_id),
+        "date": {"$gte": fy_start, "$lte": to_date}
+    }
+    
+    txns = list(StockTransaction.objects(__raw__=match_yr))
+    
+    for y, m, m_name in month_sequence:
+        m_txns = [t for t in txns if t.date.year == y and t.date.month == m]
+        
+        in_q = sum(t.qty for t in m_txns if t.txn_type == "IN")
+        in_v = sum(t.value for t in m_txns if t.txn_type == "IN")
+        out_q = sum(t.qty for t in m_txns if t.txn_type == "OUT")
+        out_v = sum(t.value for t in m_txns if t.txn_type == "OUT")
+        
+        running_qty += (in_q - out_q)
+        running_val += (in_v - out_v)
+        
+        closing_rate = (running_val / running_qty) if running_qty > 0 else 0.0
+        
+        monthly_rows.append({
+            "particulars": m_name,
+            "inwards_qty": in_q,
+            "inwards_val": round(in_v, 2),
+            "outwards_qty": out_q,
+            "outwards_val": round(out_v, 2),
+            "closing_qty": running_qty,
+            "closing_val": round(running_val, 2),
+            "closing_rate": round(closing_rate, 2),
+            "month_num": m,
+            "year": y
+        })
+        
+    return jsonify({
+        "item_name": item.name,
+        "group": groups.get(str(item.stock_group), "") if item.stock_group else "",
+        "unit": units.get(str(item.unit), "") if item.unit else "",
+        "opening_balance": {
+            "qty": op_qty,
+            "rate": round(op_rate, 2),
+            "val": round(op_val, 2)
+        },
+        "monthly": monthly_rows
+    })
+
+
+@reports_bp.get("/stock-item-vouchers")
+def stock_item_vouchers():
+    company_id = request.args.get("company_id")
+    item_id = request.args.get("item_id")
+    from_date_str = request.args.get("from")
+    to_date_str = request.args.get("to")
+    
+    if not company_id or not item_id:
+        return jsonify({"error": "company_id and item_id required"}), 400
+        
+    from_date = _parse_date(from_date_str)
+    to_date = _parse_date(to_date_str)
+    
+    from backend.models.inventory import StockItem, StockTransaction, StockGroup, StockUnit
+    from backend.models.voucher import Voucher, VoucherItem
+    
+    item = StockItem.objects(id=ObjectId(item_id)).first()
+    if not item:
+        return jsonify({"error": "Item not found"}), 404
+        
+    groups = {str(g.id): g.name for g in StockGroup.objects.all()}
+    units  = {str(u.id): u.name for u in StockUnit.objects.all()}
+    
+    # 1. Compute opening balance before from_date
+    match_op = {
+        "company_id": ObjectId(company_id),
+        "item_id": ObjectId(item_id),
+    }
+    if from_date:
+        match_op["date"] = {"$lt": from_date}
+        
+    pipeline_op = [
+        {"$match": match_op},
+        {"$group": {
+            "_id": None,
+            "in_qty":    {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$qty", 0]}},
+            "out_qty":   {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$qty", 0]}},
+            "in_value":  {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$value", 0]}},
+            "out_value": {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$value", 0]}},
+        }}
+    ]
+    
+    op_res = list(StockTransaction._get_collection().aggregate(pipeline_op))
+    op_tx = op_res[0] if op_res else {}
+    
+    op_qty = (item.opening_qty or 0.0)
+    op_val = (item.opening_value or 0.0)
+    if from_date:
+        op_qty += op_tx.get("in_qty", 0.0) - op_tx.get("out_qty", 0.0)
+        op_val += op_tx.get("in_value", 0.0) - op_tx.get("out_value", 0.0)
+        
+    op_rate = (op_val / op_qty) if op_qty > 0 else (item.opening_rate or 0.0)
+    
+    # 2. Get list of transactions in range
+    match_tx = {
+        "company_id": ObjectId(company_id),
+        "item_id": ObjectId(item_id),
+    }
+    if from_date or to_date:
+        match_tx["date"] = {}
+        if from_date: match_tx["date"]["$gte"] = from_date
+        if to_date: match_tx["date"]["$lte"] = to_date
+        
+    txns = list(StockTransaction.objects(__raw__=match_tx).order_by("date", "created_at"))
+    
+    vids = list({t.voucher_id for t in txns if t.voucher_id})
+    vouchers_map = {}
+    party_map = {}
+    
+    if vids:
+        vouchers = list(Voucher.objects(id__in=vids))
+        vouchers_map = {str(v.id): v for v in vouchers}
+        
+        vitems = list(VoucherItem.objects(voucher_id__in=vids))
+        for v in vouchers:
+            vid_str = str(v.id)
+            side = "Dr" if v.voucher_type in ["Sales", "Debit Note"] else "Cr"
+            party_item = next((i for i in vitems if str(i.voucher_id) == vid_str and i.dr_cr == side), None)
+            if party_item:
+                party_map[vid_str] = party_item.ledger_name
+            else:
+                other_item = next((i for i in vitems if str(i.voucher_id) == vid_str), None)
+                party_map[vid_str] = other_item.ledger_name if other_item else "N/A"
+                
+    running_qty = op_qty
+    running_val = op_val
+    rows = []
+    
+    for t in txns:
+        vid_str = str(t.voucher_id) if t.voucher_id else ""
+        v = vouchers_map.get(vid_str)
+        party_name = party_map.get(vid_str, "N/A")
+        
+        vch_no = v.voucher_no if v else ""
+        vch_type = v.voucher_type if v else t.txn_type
+        
+        qty = t.qty or 0.0
+        val = t.value or 0.0
+        
+        in_qty = qty if t.txn_type == "IN" else 0.0
+        in_val = val if t.txn_type == "IN" else 0.0
+        out_qty = qty if t.txn_type == "OUT" else 0.0
+        out_val = val if t.txn_type == "OUT" else 0.0
+        
+        running_qty += (in_qty - out_qty)
+        running_val += (in_val - out_val)
+        closing_rate = (running_val / running_qty) if running_qty > 0 else 0.0
+        
+        rows.append({
+            "date": t.date.strftime("%Y-%m-%d") if t.date else "",
+            "particulars": party_name,
+            "voucher_type": vch_type,
+            "voucher_no": vch_no,
+            "voucher_id": vid_str,
+            "inwards_qty": in_qty,
+            "inwards_val": round(in_val, 2),
+            "outwards_qty": out_qty,
+            "outwards_val": round(out_val, 2),
+            "closing_qty": running_qty,
+            "closing_val": round(running_val, 2),
+            "closing_rate": round(closing_rate, 2),
+        })
+        
+    return jsonify({
+        "item_name": item.name,
+        "group": groups.get(str(item.stock_group), "") if item.stock_group else "",
+        "unit": units.get(str(item.unit), "") if item.unit else "",
+        "opening_balance": {
+            "qty": op_qty,
+            "rate": round(op_rate, 2),
+            "val": round(op_val, 2)
+        },
+        "rows": rows
+    })
+
+
+@reports_bp.get("/stock-query/<item_id>")
+def stock_query(item_id):
+    company_id = request.args.get("company_id")
+    if not company_id:
+        return jsonify({"error": "company_id required"}), 400
+        
+    from backend.models.inventory import StockItem, StockTransaction, StockGroup, StockCategory, StockUnit
+    from backend.models.voucher import Voucher, VoucherItem
+    
+    item = StockItem.objects(id=ObjectId(item_id)).first()
+    if not item:
+        return jsonify({"error": "Item not found"}), 404
+        
+    groups = {str(g.id): g.name for g in StockGroup.objects.all()}
+    categories = {str(c.id): c for c in StockCategory.objects.all()}
+    units  = {str(u.id): u.name for u in StockUnit.objects.all()}
+    
+    cat = categories.get(str(item.category)) if item.category else None
+    cat_name = cat.name if cat else "Not Applicable"
+    group_name = groups.get(str(item.stock_group), "") if item.stock_group else ""
+    unit_name = units.get(str(item.unit), "") if item.unit else "Nos"
+    
+    match_tot = {
+        "company_id": ObjectId(company_id),
+        "item_id": ObjectId(item_id),
+    }
+    
+    pipeline_tot = [
+        {"$match": match_tot},
+        {"$group": {
+            "_id": None,
+            "in_qty":    {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$qty", 0]}},
+            "out_qty":   {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$qty", 0]}},
+            "in_value":  {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$value", 0]}},
+            "out_value": {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$value", 0]}},
+        }}
+    ]
+    
+    tot_res = list(StockTransaction._get_collection().aggregate(pipeline_tot))
+    tot_tx = tot_res[0] if tot_res else {}
+    
+    closing_qty = (item.opening_qty or 0.0) + tot_tx.get("in_qty", 0.0) - tot_tx.get("out_qty", 0.0)
+    closing_val = (item.opening_value or 0.0) + tot_tx.get("in_value", 0.0) - tot_tx.get("out_value", 0.0)
+    closing_rate = (closing_val / closing_qty) if closing_qty > 0 else (item.opening_rate or 0.0)
+    
+    last_purch = StockTransaction.objects(company_id=ObjectId(company_id), item_id=ObjectId(item_id), txn_type="IN").order_by("-date", "-created_at").first()
+    last_sold = StockTransaction.objects(company_id=ObjectId(company_id), item_id=ObjectId(item_id), txn_type="OUT").order_by("-date", "-created_at").first()
+    
+    def _get_txn_detail(t):
+        if not t: return None
+        party_name = "N/A"
+        if t.voucher_id:
+            v = Voucher.objects(id=t.voucher_id).first()
+            if v:
+                vitems = list(VoucherItem.objects(voucher_id=v.id))
+                side = "Dr" if v.voucher_type in ["Sales", "Debit Note"] else "Cr"
+                party_item = next((i for i in vitems if i.dr_cr == side), None)
+                if party_item: party_name = party_item.ledger_name
+        return {
+            "date": t.date.strftime("%Y-%m-%d") if t.date else "",
+            "party_name": party_name,
+            "qty": t.qty or 0.0,
+            "rate": t.rate or 0.0,
+            "amount": t.value or 0.0,
+            "discount": t.discount or 0.0
+        }
+        
+    last_purch_detail = _get_txn_detail(last_purch)
+    last_sold_detail = _get_txn_detail(last_sold)
+    
+    purchases_txns = list(StockTransaction.objects(company_id=ObjectId(company_id), item_id=ObjectId(item_id), txn_type="IN").order_by("-date", "-created_at").limit(10))
+    sales_txns = list(StockTransaction.objects(company_id=ObjectId(company_id), item_id=ObjectId(item_id), txn_type="OUT").order_by("-date", "-created_at").limit(10))
+    
+    purchases_list = [_get_txn_detail(t) for t in purchases_txns]
+    sales_list = [_get_txn_detail(t) for t in sales_txns]
+    
+    same_cat_items = []
+    cid = item.category
+    if cid and (isinstance(cid, ObjectId) or (isinstance(cid, str) and ObjectId.is_valid(cid))):
+        siblings = list(StockItem.objects(company_id=ObjectId(company_id), category=ObjectId(cid)))
+        for sib in siblings:
+            if sib.id == item.id: continue
+            
+            sib_pipeline = [
+                {"$match": {"company_id": ObjectId(company_id), "item_id": sib.id}},
+                {"$group": {
+                    "_id": None,
+                    "in_qty":    {"$sum": {"$cond": [{"$eq": ["$txn_type", "IN"]},  "$qty", 0]}},
+                    "out_qty":   {"$sum": {"$cond": [{"$eq": ["$txn_type", "OUT"]}, "$qty", 0]}},
+                }}
+            ]
+            sib_res = list(StockTransaction._get_collection().aggregate(sib_pipeline))
+            sib_tx = sib_res[0] if sib_res else {}
+            sib_closing_qty = (sib.opening_qty or 0.0) + sib_tx.get("in_qty", 0.0) - sib_tx.get("out_qty", 0.0)
+            
+            same_cat_items.append({
+                "name": sib.name,
+                "qty": sib_closing_qty,
+                "cost": sib.opening_rate or 0.0,
+                "sale_price": sib.price or 0.0,
+                "unit": units.get(str(sib.unit), "Nos") if sib.unit else "Nos"
+            })
+            
+    return jsonify({
+        "item_details": {
+            "name": item.name,
+            "group": group_name,
+            "category": cat_name,
+            "unit": unit_name,
+            "hsn_sac": item.hsn_sac or "",
+            "gst_rate": item.gst_rate or 0.0,
+            "costing_method": "Avg. Cost",
+            "market_valuation_method": "Avg. Price",
+            "standard_selling_price": item.price or 0.0,
+            "standard_cost": item.opening_rate or 0.0,
+        },
+        "closing_balance": {
+            "qty": closing_qty,
+            "rate": round(closing_rate, 2),
+            "val": round(closing_val, 2)
+        },
+        "last_purchased": last_purch_detail,
+        "last_sold": last_sold_detail,
+        "purchases": purchases_list,
+        "sales": sales_list,
+        "same_category_items": same_cat_items
+    })
+
+

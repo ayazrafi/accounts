@@ -659,28 +659,7 @@ class VoucherPage(QWidget):
         self.total_count = 0
         self._build()
 
-    def _open_voucher(self, vtype):
-        """Open the creation dialog for a specific voucher type."""
-        if vtype == "Credit Note":
-            self.window().open_credit_note()
-            return
-        elif vtype == "Debit Note":
-            self.window().open_debit_note()
-            return
-        elif vtype in INVOICE_TYPES:
-            dlg = InvoiceVoucherDialog(self, vtype)
-        elif vtype in ["Payment", "Receipt"]:
-            dlg = PaymentReceiptDialog(self, vtype)
-        else:
-            dlg = JournalVoucherDialog(self, vtype)
-        
-        if dlg.exec():
-            data = dlg.get_data()
-            try:
-                api.create_voucher(data)
-                self._load()
-            except Exception as ex:
-                QMessageBox.warning(self, "Error", str(ex))
+
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -795,6 +774,11 @@ class VoucherPage(QWidget):
                 if vtype in ["Payment", "Receipt"]: result = api.create_accounting_voucher(data)
                 else: result = api.create_voucher(data)
                 self._load()
+                
+                # Automatically open print options to view the Tax Invoice PDF for Sales vouchers
+                if vtype == "Sales" and result and isinstance(result, dict) and result.get("id"):
+                    vid = result.get("id")
+                    QTimer.singleShot(100, lambda: self._view_pdf(vid))
             except Exception as ex: QMessageBox.warning(self, "Error", str(ex))
         for b in self._vtype_btns.values(): b.setChecked(False)
 

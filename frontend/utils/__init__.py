@@ -159,6 +159,8 @@ class _KeyboardNavFilter(QObject):
         
         # Forward navigation (Enter)
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+                return False
             nxt = self._get_next()
             if nxt:
                 self._focus_and_select(nxt)
@@ -272,7 +274,7 @@ class _SearchPopup(QWidget):
         self.list_view.clicked.connect(self._on_clicked)
         self.search.returnPressed.connect(self._select_first_or_current)
         self.list_view.installEventFilter(self)
-        self.search.installEventFilter(self)   # intercept Alt+V before QLineEdit eats it
+        self.search.installEventFilter(self)   # intercept Ctrl+Enter before QLineEdit eats it
 
         # pre-select current item
         self._highlight_current()
@@ -307,13 +309,19 @@ class _SearchPopup(QWidget):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
             key = event.key()
-            # Alt+V from either the search box OR the list view → trigger edit
-            if (key == Qt.Key.Key_V and
-                    event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            # Ctrl+Enter from either the search box OR the list view → trigger edit
+            if (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and
+                    event.modifiers() & Qt.KeyboardModifier.ControlModifier):
                 self.hide()
                 self._combo.setFocus()
                 self._combo._trigger_edit()
-                return True   # consume — do NOT let QLineEdit type 'v'
+                return True   # consume
+            elif (key == Qt.Key.Key_C and
+                    event.modifiers() & Qt.KeyboardModifier.AltModifier):
+                self.hide()
+                self._combo.setFocus()
+                self._combo._trigger_create_new()
+                return True   # consume — do NOT let QLineEdit type 'c'
             if obj is self.list_view:
                 if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                     self._select_first_or_current()
@@ -482,11 +490,41 @@ class SearchableComboBox(QComboBox):
                 if new_data is not None:
                     item.setData(new_data, Qt.ItemDataRole.UserRole)
 
+    def _trigger_create_new(self):                     # noqa: N802
+        """Fire the registered create_new callback (Alt+C handler)."""
+        if not self.isEnabled() or not self.isVisible():
+            return
+        open_fn = getattr(self, "_cn_open_fn", None)
+        if not open_fn:
+            return
+        
+        # Save previous selection
+        prev = self.currentIndex()
+        
+        # Hide popup if open
+        if self._popup and self._popup.isVisible():
+            self._popup.hide()
+            
+        def _open():
+            result = open_fn()
+            if result:
+                text, data = result
+                pos = self.count() - 1  # insert before sentinel
+                self.insertItem(pos, text, data)
+                self.setCurrentIndex(pos)
+            else:
+                self.setCurrentIndex(prev)
+                
+        QTimer.singleShot(0, _open)
+
     def keyPressEvent(self, event):                   # noqa: N802
         key = event.key()
-        if (key == Qt.Key.Key_V and
-                event.modifiers() & Qt.KeyboardModifier.AltModifier):
+        if (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and
+                event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             self._trigger_edit()
+        elif (key == Qt.Key.Key_C and
+                event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            self._trigger_create_new()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
                      Qt.Key.Key_Space, Qt.Key.Key_Down):
             self.showPopup()
@@ -516,7 +554,7 @@ def wire_edit_selected(combo: "SearchableComboBox", edit_fn):
     """
     Register an edit callback on *combo*.
 
-    When the user presses **Alt+V** while the combo (or its popup) is focused
+    When the user presses **Ctrl+Enter** while the combo (or its popup) is focused
     and a real item is selected, *edit_fn(current_data)* is called.
 
     *edit_fn* must accept the current item's ``UserRole`` data and return
@@ -537,6 +575,7 @@ def wire_create_new(combo: "SearchableComboBox", open_fn):
     """
     combo.addItem(CREATE_NEW_LABEL)
     combo._cn_prev_index = max(combo.count() - 2, 0)
+    combo._cn_open_fn = open_fn
 
     def _on_changed(idx):
         if combo.itemText(idx) == CREATE_NEW_LABEL:

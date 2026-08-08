@@ -30,6 +30,14 @@ class InvoicePdfViewer(QDialog):
         vid = voucher_data.get('_id', 'temp')
         self.pdf_path = os.path.join(tempfile.gettempdir(), f"invoice_{vid}_{self.invoice_type}_{self.copy_type}.pdf")
         
+        # Fetch active signature if available
+        self.active_signature = None
+        try:
+            import frontend.api_client as api
+            self.active_signature = api.get_active_signature()
+        except Exception as e:
+            print(f"Error fetching active signature: {e}")
+            
         self._generate_pdf()
         self._setup_ui()
         
@@ -94,9 +102,23 @@ class InvoicePdfViewer(QDialog):
     def _generate_invoice_template(self, copy_label, title_label):
         v = self.voucher_data
         c = self.company_data
+        
+        # Date formatting to DD-MM-YYYY
+        from datetime import datetime
+        raw_date = v.get("date", "")
+        formatted_date = raw_date
+        if raw_date:
+            try:
+                dt = datetime.strptime(raw_date, "%Y-%m-%d")
+                formatted_date = dt.strftime("%d-%m-%Y")
+            except Exception:
+                pass
+
         items = v.get("invoice_items", [])
         accounting_items = v.get("items", [])
         party_name = ""; party_address = "N/A"; party_gstin = "N/A"
+
+        party_phone = ""; party_email = ""
         adj_ledgers = []
         grand_total = 0.0
 
@@ -131,6 +153,9 @@ class InvoicePdfViewer(QDialog):
                 grand_total   = e.get("amount", 0.0)
                 party_address = e.get("ledger_address", "")
                 party_gstin   = e.get("ledger_gst_no", "")
+                party_phone   = e.get("ledger_phone", "")
+                party_email   = e.get("ledger_email", "")
+
             elif any(x in gname for x in ["DUTIES", "TAX", "EXPENSE", "INCOME", "DISCOUNT"]):
                 name = e.get("ledger_name", "")
                 amt  = e.get("amount", 0.0)
@@ -198,11 +223,40 @@ class InvoicePdfViewer(QDialog):
 
         amt_words = num_to_words(grand_total)
 
-        # Credit Note specific metadata
+        # Transporter & Voucher Metadata
         meta = v.get("metadata", {})
         reason = meta.get("reason", "N/A")
-        # In Credit Note, narration often contains original invoice info
         narration = v.get("narration", "")
+        transporter_name = meta.get("transporter_name", "")
+        lr_no = meta.get("lr_no", "")
+
+
+        transporter_row = ""
+        if transporter_name or lr_no:
+            transporter_row = f"""
+                <tr>
+                    <td class="padding-sm" style="border-left:none; border-top:1px solid #000; border-bottom:none;">
+                        <div class="meta-label">Transporter</div>
+                        <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">{escape(transporter_name) or 'N/A'}</div>
+                    </td>
+                    <td class="padding-sm" style="border-right:none; border-top:1px solid #000; border-bottom:none;">
+                        <div class="meta-label">LR No.</div>
+                        <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">{escape(lr_no) or 'N/A'}</div>
+                    </td>
+                </tr>
+            """
+
+        payment_terms_html = ""
+
+        sig_img_html = ""
+        sig_margin = 50
+        if self.active_signature and self.active_signature.get("image_data"):
+            sig_img_html = f"""
+                <div style="text-align: center; margin-bottom: 5px;">
+                    <img src="data:image/png;base64,{self.active_signature['image_data']}" style="max-height: 45px; max-width: 150px; display: inline-block; vertical-align: bottom;" />
+                </div>
+            """
+            sig_margin = 10
 
         html = f"""
         <html>
@@ -254,6 +308,7 @@ class InvoicePdfViewer(QDialog):
                         <div class="company-name">{c.get('name', 'Company Name')}</div>
                         <div style="font-size: 12px; margin-top: 8px; line-height: 1.4;">
                             {c.get('address', 'Address')}<br>
+                            <b>Phone:</b> {c.get('phone', 'N/A')} | <b>Email:</b> {c.get('email', 'N/A')}<br>
                             <b>GSTIN:</b> {c.get('gst_no', '')}<br>
                             <b>PAN:</b> {c.get('pan', '')}
                         </div>
@@ -262,19 +317,22 @@ class InvoicePdfViewer(QDialog):
                         <table class="full-width-table" style="height: 100%;">
                             <tr>
                                 <td class="padding-sm" style="border-top:none; border-left:none;">
-                                    <div class="meta-label">{title_label.split()[0]} No.</div>
+                                    <div class="meta-label">{"Bill No." if title_label == "TAX INVOICE" else f"{title_label.split()[0]} No."}</div>
                                     <div class="meta-value">{v.get('voucher_no', '')}</div>
                                 </td>
                                 <td class="padding-sm" style="border-top:none; border-right:none;">
                                     <div class="meta-label">Dated</div>
-                                    <div class="meta-value">{v.get('date', '')}</div>
+                                    <div class="meta-value">{formatted_date}</div>
                                 </td>
+
                             </tr>
-                            {f"<tr><td class='padding-sm' style='border-left:none;'><div class='meta-label'>Original Inv No.</div><div style='font-size: 12px; font-weight: bold; margin-top: 2px;'>{narration.split('against Inv#', 1)[1].split(' | ', 1)[0] if 'against Inv#' in narration else 'N/A'}</div></td><td class='padding-sm' style='border-right:none;'><div class='meta-label'>Reason</div><div style='font-size: 11px; font-weight: bold; margin-top: 2px;'>{reason}</div></td></tr>" if is_credit_note or is_debit_note else "<tr><td colspan='2' class='padding-sm' style='border-left:none; border-right:none; border-bottom:none;'><div class='meta-label'>Mode/Terms of Payment</div><div style='font-size: 12px; margin-top: 2px;'>" + v.get('payment_terms', 'Net 30') + "</div></td></tr>"}
+                            {f"<tr><td class='padding-sm' style='border-left:none;'><div class='meta-label'>Original Inv No.</div><div style='font-size: 12px; font-weight: bold; margin-top: 2px;'>{narration.split('against Inv#', 1)[1].split(' | ', 1)[0] if 'against Inv#' in narration else 'N/A'}</div></td><td class='padding-sm' style='border-right:none;'><div class='meta-label'>Reason</div><div style='font-size: 11px; font-weight: bold; margin-top: 2px;'>{reason}</div></td></tr>" if is_credit_note or is_debit_note else payment_terms_html}
                             {f"<tr><td colspan='2' class='padding-sm' style='border-left:none; border-right:none; border-top: 1px solid #000; border-bottom:none;'><div class='meta-label'>Supplier CN Ref.</div><div style='font-size: 12px; font-weight: bold; margin-top: 2px;'>{meta.get('supplier_cn_no', 'N/A')}</div></td></tr>" if is_debit_note else ""}
+                            {transporter_row}
                         </table>
                     </td>
                 </tr>
+
                 <!-- Billing -->
                 <tr>
                     <td style="width: 50%; vertical-align: top;">
@@ -283,6 +341,7 @@ class InvoicePdfViewer(QDialog):
                             <div style="font-size: 14px; font-weight: bold; text-transform: uppercase;">{party_name}</div>
                             <div style="font-size: 11px; margin-top: 4px; line-height: 1.4;">
                                 {party_address or '&nbsp;'}<br>
+                                <b>Phone:</b> {party_phone or 'N/A'} | <b>Email:</b> {party_email or 'N/A'}<br>
                                 <b>GSTIN/UIN:</b> {party_gstin or 'N/A'}
                             </div>
                         </div>
@@ -293,11 +352,13 @@ class InvoicePdfViewer(QDialog):
                             <div style="font-size: 14px; font-weight: bold; text-transform: uppercase;">{party_name}</div>
                             <div style="font-size: 11px; margin-top: 4px; line-height: 1.4;">
                                 {party_address or '&nbsp;'}<br>
+                                <b>Phone:</b> {party_phone or 'N/A'} | <b>Email:</b> {party_email or 'N/A'}<br>
                                 <b>GSTIN/UIN:</b> {party_gstin or 'N/A'}
                             </div>
                         </div>
                     </td>
                 </tr>
+
                 <!-- Items -->
                 <tr>
                     <td colspan="3" style="padding: 0;">
@@ -343,11 +404,11 @@ class InvoicePdfViewer(QDialog):
         # Gross Total row
         html += f"""
                                 <tr style="background-color:#f8f9fa;">
-                                    <td colspan="6" class="padding-sm text-right"
+                                    <td colspan="5" class="padding-sm text-right"
                                         style="font-size:11px; font-weight:bold; text-transform:uppercase; color:#455a64;">
                                         Gross Total
                                     </td>
-                                    <td class="padding-sm text-right" style="font-size:12px; font-weight:bold;">{format_indian_number(gross_subtotal)}</td>
+                                    <td colspan="2" class="padding-sm text-right" style="font-size:12px; font-weight:bold; white-space:nowrap;">{format_indian_number(gross_subtotal)}</td>
                                 </tr>
         """
 
@@ -361,21 +422,21 @@ class InvoicePdfViewer(QDialog):
             disp_amt = f"({format_indian_number(lamt)})" if is_deduction else format_indian_number(lamt)
             html += f"""
                                 <tr>
-                                    <td colspan="6" class="padding-sm text-right"
+                                    <td colspan="5" class="padding-sm text-right"
                                         style="font-size:11px; font-weight:bold;">{lname}</td>
-                                    <td class="padding-sm text-right" style="font-size:11px;">{disp_amt}</td>
+                                    <td colspan="2" class="padding-sm text-right" style="font-size:11px; white-space:nowrap;">{disp_amt}</td>
                                 </tr>
             """
 
         # Final Value
         html += f"""
                                 <tr style="background-color:#cfd8dc;">
-                                    <td colspan="6" class="padding-sm text-right"
+                                    <td colspan="5" class="padding-sm text-right"
                                         style="font-size:12px; font-weight:bold; text-transform:uppercase;">
                                         Total {title_label} Value
                                     </td>
-                                    <td class="padding-sm text-right"
-                                        style="font-size:14px; font-weight:900; border-top:2px solid #000;">{format_indian_number(grand_total)}</td>
+                                    <td colspan="2" class="padding-sm text-right"
+                                        style="font-size:14px; font-weight:900; border-top:2px solid #000; white-space:nowrap;">{format_indian_number(grand_total)}</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -397,8 +458,11 @@ class InvoicePdfViewer(QDialog):
                         </div>
                     </td>
                     <td style="padding:15px; vertical-align:bottom; text-align:right;">
-                        <div style="font-size:11px; font-weight:bold; margin-bottom:50px;">For {c.get('name','Company Name')}</div>
-                        <div style="font-size:11px; font-weight:bold; border-top: 1px solid #000; display: inline-block; padding-top: 5px;">Authorized Signatory</div>
+                        <div style="display: inline-block; text-align: center; min-width: 200px;">
+                            <div style="font-size:11px; font-weight:bold; margin-bottom:{sig_margin}px;">For {c.get('name','Company Name')}</div>
+                            {sig_img_html}
+                            <div style="font-size:11px; font-weight:bold; border-top: 1px solid #000; width: 100%; padding-top: 5px;">Authorized Signatory</div>
+                        </div>
                     </td>
                 </tr>
             </table>
@@ -410,14 +474,29 @@ class InvoicePdfViewer(QDialog):
     def _invoice_context(self):
         v = self.voucher_data
         c = self.company_data
+        
+        # Date formatting to DD-MM-YYYY
+        from datetime import datetime
+        raw_date = v.get("date", "")
+        formatted_date = raw_date
+        if raw_date:
+            try:
+                dt = datetime.strptime(raw_date, "%Y-%m-%d")
+                formatted_date = dt.strftime("%d-%m-%Y")
+            except Exception:
+                pass
+
         items = v.get("invoice_items", [])
         accounting_items = v.get("items", [])
         is_sales = v.get("voucher_type") == "Sales"
         party_dr_cr = "Dr" if is_sales else "Cr"
 
+
         party_name = ""
         party_address = ""
         party_gstin = ""
+        party_phone = ""
+        party_email = ""
         grand_total = 0.0
         adjustments = []
 
@@ -430,7 +509,10 @@ class InvoicePdfViewer(QDialog):
                 party_name = name
                 party_address = e.get("ledger_address", "")
                 party_gstin = e.get("ledger_gst_no", "")
+                party_phone = e.get("ledger_phone", "")
+                party_email = e.get("ledger_email", "")
                 grand_total = amt
+
             elif amt and any(x in gname for x in ["DUTIES", "TAX", "EXPENSE", "INCOME", "DISCOUNT"]):
                 adjustments.append((name, amt, dr_cr))
 
@@ -446,12 +528,17 @@ class InvoicePdfViewer(QDialog):
             "party_name": party_name,
             "party_address": party_address,
             "party_gstin": party_gstin,
+            "party_phone": party_phone,
+            "party_email": party_email,
             "grand_total": grand_total,
             "taxable": taxable,
             "tax_total": tax_total,
             "adjustments": adjustments,
             "is_sales": is_sales,
+            "formatted_date": formatted_date,
         }
+
+
 
     def _amount_words(self, n):
         if n == 0:
@@ -498,6 +585,10 @@ class InvoicePdfViewer(QDialog):
         taxable = ctx["taxable"]
         words = self._amount_words(grand_total)
 
+        meta = v.get("metadata", {})
+        transporter_name = meta.get("transporter_name", "")
+        lr_no = meta.get("lr_no", "")
+
         rows = ""
         for i, item in enumerate(items, 1):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
@@ -524,6 +615,16 @@ class InvoicePdfViewer(QDialog):
                     <td class="right"><b>{format_indian_number(amount)}</b></td>
                 </tr>
             """
+
+        sig_img_html = ""
+        if self.active_signature and self.active_signature.get("image_data"):
+            sig_img_html = f"""
+                <div style="text-align: center; margin-top: 5px; margin-bottom: 5px;">
+                    <img src="data:image/png;base64,{self.active_signature['image_data']}" style="max-height: 48px; max-width: 150px; display: inline-block; vertical-align: bottom;" />
+                </div>
+            """
+        else:
+            sig_img_html = "<br><br><br><br>"
 
         return f"""
         <html>
@@ -554,23 +655,27 @@ class InvoicePdfViewer(QDialog):
                     <td rowspan="7" colspan="3">
                         <div class="company">{company_name}</div>
                         <div>{company_address}</div>
+                        <div><b>Phone:</b> {escape(c.get('phone', 'N/A'))} | <b>Email:</b> {escape(c.get('email', 'N/A'))}</div>
                         <div>{company_gst}</div>
                         <div><b>State Name:</b> {escape(c.get('state', ''))}</div>
                         <br>
                         <div>Buyer</div>
                         <div><b>{party_name}</b></div>
                         <div>{party_address}</div>
+                        <div><b>Phone:</b> {escape(ctx.get('party_phone', 'N/A'))} | <b>Email:</b> {escape(ctx.get('party_email', 'N/A'))}</div>
                         <div><b>GSTIN/UIN:</b> {party_gstin}</div>
                     </td>
                     <td colspan="2">Invoice No.<br><b>{escape(v.get('voucher_no', ''))}</b></td>
-                    <td colspan="2">Dated<br><b>{escape(v.get('date', ''))}</b></td>
+                    <td colspan="2">Dated<br><b>{escape(ctx.get('formatted_date', ''))}</b></td>
+
                 </tr>
-                <tr><td colspan="2">Delivery Note</td><td colspan="2">Mode/Terms of Payment</td></tr>
+                <tr><td colspan="2">Delivery Note</td><td colspan="2">&nbsp;</td></tr>
                 <tr><td colspan="2">Supplier's Ref.</td><td colspan="2">Other Reference(s)</td></tr>
                 <tr><td colspan="2">Buyer's Order No.</td><td colspan="2">Dated</td></tr>
-                <tr><td colspan="2">Dispatch Document No.</td><td colspan="2">Delivery Note Date</td></tr>
-                <tr><td colspan="2">Dispatched through</td><td colspan="2">Destination</td></tr>
+                <tr><td colspan="2">Dispatch Document No. / LR No.<br><b>{escape(lr_no) or '&nbsp;'}</b></td><td colspan="2">Delivery Note Date</td></tr>
+                <tr><td colspan="2">Dispatched through<br><b>{escape(transporter_name) or '&nbsp;'}</b></td><td colspan="2">Destination</td></tr>
                 <tr><td colspan="4">Terms of Delivery</td></tr>
+
                 <tr>
                     <th style="width:5%;">Sl<br>No.</th>
                     <th colspan="2" style="width:35%;">Description of Goods</th>
@@ -586,7 +691,7 @@ class InvoicePdfViewer(QDialog):
                     <td colspan="5" class="right">Total</td>
                     <td class="right">{sum(float(it.get('qty', 0.0) or 0.0) for it in items):g}</td>
                     <td></td>
-                    <td class="right">{format_inr(grand_total, symbol='Rs ')}</td>
+                    <td class="right" style="white-space: nowrap;">{format_inr(grand_total, symbol='Rs ')}</td>
                 </tr>
                 <tr>
                     <td colspan="7">
@@ -606,9 +711,12 @@ class InvoicePdfViewer(QDialog):
                         <b>Declaration</b><br>
                         We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
                     </td>
-                    <td colspan="3" class="footer-cell right">
-                        <b>for {company_name}</b><br><br><br><br>
-                        Authorised Signatory
+                    <td colspan="3" class="footer-cell right" style="vertical-align: bottom; padding: 10px;">
+                        <div style="display: inline-block; text-align: center; min-width: 200px;">
+                            <b style="font-size:11px;">for {company_name}</b>
+                            {sig_img_html}
+                            <div style="border-top: 1px solid #000; width: 100%; padding-top: 5px; font-weight: bold; font-size:11px;">Authorised Signatory</div>
+                        </div>
                     </td>
                 </tr>
             </table>
@@ -622,6 +730,19 @@ class InvoicePdfViewer(QDialog):
         v, c, items = ctx["v"], ctx["c"], ctx["items"]
         company_name = escape(c.get("name", "Company Name"))
         party_name = escape(ctx["party_name"] or "Party Name")
+        meta = v.get("metadata", {})
+        transporter_name = meta.get("transporter_name", "")
+        lr_no = meta.get("lr_no", "")
+        
+        transporter_row = ""
+        if transporter_name or lr_no:
+            transporter_row = f"""
+                <tr>
+                    <td colspan="2"><b>Transporter:</b> {escape(transporter_name) or 'N/A'}</td>
+                    <td><b>LR No:</b> {escape(lr_no) or 'N/A'}</td>
+                </tr>
+            """
+
         rows = ""
         for i, item in enumerate(items, 1):
             name = item.get('item_name', item.get('name', 'Unknown Item'))
@@ -641,6 +762,16 @@ class InvoicePdfViewer(QDialog):
 
         for name, amount, _ in ctx["adjustments"]:
             rows += f'<tr><td colspan="6" class="right"><b>{escape(name)}</b></td><td class="right">{format_indian_number(amount)}</td></tr>'
+        
+        sig_img_html = ""
+        if self.active_signature and self.active_signature.get("image_data"):
+            sig_img_html = f"""
+                <div style="text-align: center; margin-top: 5px; margin-bottom: 5px;">
+                    <img src="data:image/png;base64,{self.active_signature['image_data']}" style="max-height: 48px; max-width: 150px; display: inline-block; vertical-align: bottom;" />
+                </div>
+            """
+        else:
+            sig_img_html = "<br><br><br><br>"
 
         return f"""
         <html>
@@ -671,6 +802,7 @@ class InvoicePdfViewer(QDialog):
                         <div class="title">Tax Invoice</div>
                         <div class="company">{company_name}</div>
                         <div>{escape(c.get('address', 'Address'))}</div>
+                        <div><b>Phone:</b> {escape(c.get('phone', 'N/A'))} | <b>Email:</b> {escape(c.get('email', 'N/A'))}</div>
                         <div><b>GSTIN:</b> {escape(c.get('gst_no', ''))}</div>
                     </div>
                     <div class="copy">{copy_label}</div>
@@ -678,14 +810,17 @@ class InvoicePdfViewer(QDialog):
                 <table class="meta">
                     <tr>
                         <td><b>Invoice No.</b><br>{escape(v.get('voucher_no', ''))}</td>
-                        <td><b>Dated</b><br>{escape(v.get('date', ''))}</td>
+                        <td><b>Dated</b><br>{escape(ctx.get('formatted_date', ''))}</td>
                         <td><b>Place of Supply</b><br>{escape(c.get('state', ''))}</td>
+
                     </tr>
+                    {transporter_row}
                     <tr>
-                        <td colspan="2"><b>Billed to</b><br>{party_name}<br>{escape(ctx['party_address'] or '')}<br><b>GSTIN/UIN:</b> {escape(ctx['party_gstin'] or '')}</td>
+                        <td colspan="2"><b>Billed to</b><br>{party_name}<br>{escape(ctx['party_address'] or '')}<br><b>Phone:</b> {escape(ctx.get('party_phone', 'N/A'))} | <b>Email:</b> {escape(ctx.get('party_email', 'N/A'))}<br><b>GSTIN/UIN:</b> {escape(ctx['party_gstin'] or '')}</td>
                         <td><b>Shipped to</b><br>{party_name}<br>{escape(ctx['party_address'] or '')}</td>
                     </tr>
                 </table>
+
                 <table class="items">
                     <tr>
                         <th style="width:5%;">S.N.</th>
@@ -698,12 +833,18 @@ class InvoicePdfViewer(QDialog):
                     </tr>
                     {rows}
                     <tr class="spacer"><td colspan="6"></td></tr>
-                    <tr class="total"><td colspan="6" class="right">Grand Total</td><td class="right">{format_inr(ctx['grand_total'], symbol='Rs ')}</td></tr>
+                    <tr class="total"><td colspan="5" class="right">Grand Total</td><td colspan="2" class="right" style="white-space: nowrap;">{format_inr(ctx['grand_total'], symbol='Rs ')}</td></tr>
                 </table>
                 <div style="border:1px solid #111;border-top:none;padding:8px;font-size:12px;"><b>Rupees {escape(self._amount_words(ctx['grand_total']))} Only</b></div>
                 <div class="footer">
                     <div><b>Terms &amp; Conditions</b><br>E. &amp; O.E.<br>Goods once sold will not be taken back.</div>
-                    <div class="right"><b>for {company_name}</b><br><br><br><br>Authorised Signatory</div>
+                    <div class="right" style="display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; padding: 8px;">
+                        <div style="display: inline-block; text-align: center; min-width: 200px;">
+                            <b style="font-size:11px;">for {company_name}</b>
+                            {sig_img_html}
+                            <div style="border-top: 1px solid #111; width: 100%; padding-top: 5px; font-weight: bold; font-size:11px;">Authorised Signatory</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </body>

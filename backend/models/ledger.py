@@ -17,6 +17,7 @@ class Ledger(Document):
     address         = StringField(default="")
     state           = StringField(default="")
     gst_no          = StringField(default="")
+    transporter     = ObjectIdField()
     
     # Bank Details
     bank_name           = StringField(default="")
@@ -53,6 +54,7 @@ def _to_dict(l: Ledger) -> dict:
         "branch_name":     l.branch_name or "",
         "account_type":    l.account_type or "",
         "gst_no":          l.gst_no or "",
+        "transporter":     str(l.transporter) if l.transporter else "",
     }
 
 
@@ -88,6 +90,7 @@ def create_ledger(data: dict) -> str:
         branch_name=data.get("branch_name", ""),
         account_type=data.get("account_type", ""),
         gst_no=data.get("gst_no", ""),
+        transporter=ObjectId(data["transporter"]) if data.get("transporter") else None,
     )
     l.save()
     return str(l.id)
@@ -103,6 +106,8 @@ def update_ledger(ledger_id: str, data: dict):
             setattr(l, field, data[field])
     if 'group' in data and data['group']:
         l.group = ObjectId(data['group'])
+    if 'transporter' in data:
+        l.transporter = ObjectId(data['transporter']) if data['transporter'] else None
     l.updated_at = datetime.utcnow()
     l.save()
 

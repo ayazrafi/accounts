@@ -1,8 +1,8 @@
 import requests
 import os
-from dotenv import load_dotenv
+from backend.config import load_env
 
-load_dotenv()
+load_env()
 BASE_URL = f"http://127.0.0.1:{os.getenv('FLASK_PORT', 5050)}/api"
 
 def set_server_address(ip, port=None):
@@ -238,9 +238,12 @@ def list_mappings(company_id=None, user_id=None):
 def delete_mapping(mid):
     return _delete(f'/auth/mappings/{mid}')
 
+def get_db_info():
+    return _get('/settings/db-info')
+
 def backup_company(company_id):
     params = {"company_id": company_id}
-    r = requests.get(BASE_URL + "/settings/backup", params=params, timeout=30)
+    r = requests.get(BASE_URL + "/settings/backup", params=params, headers=_headers(), timeout=30)
     r.raise_for_status()
     return r.content, r.headers.get("Content-Disposition", "")
 
@@ -249,7 +252,7 @@ def restore_company(company_id, file_path):
     params = {"company_id": company_id}
     with open(file_path, "rb") as f:
         files = {"file": f}
-        r = requests.post(BASE_URL + "/settings/restore", params=params, files=files, timeout=30)
+        r = requests.post(BASE_URL + "/settings/restore", params=params, files=files, headers=_headers(), timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -278,9 +281,100 @@ def gst_summary(from_date=None, to_date=None):
     if c: p["company_id"] = c
     return _get("/reports/gst-summary", params=p)
 
+# Stock Reports
+def stock_group_summary(group_id=None, to_date=None):
+    p = {}
+    if group_id: p["group_id"] = group_id
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/stock-group-summary", params=p)
+
+def stock_category_summary(category_id=None, to_date=None):
+    p = {}
+    if category_id: p["category_id"] = category_id
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/stock-category-summary", params=p)
+
+def stock_monthly_summary(item_id, from_date=None, to_date=None):
+    p = {"item_id": item_id}
+    if from_date: p["from"] = from_date
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/stock-monthly-summary", params=p)
+
+def stock_item_vouchers(item_id, from_date=None, to_date=None):
+    p = {"item_id": item_id}
+    if from_date: p["from"] = from_date
+    if to_date: p["to"] = to_date
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/reports/stock-item-vouchers", params=p)
+
+def stock_query(item_id):
+    p = {}
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get(f"/reports/stock-query/{item_id}", params=p)
+
 def save_role_permissions(data):
     return _post('/auth/roles/permissions', data)
 
 def get_role_permissions(role_id):
     return _get(f'/auth/roles/{role_id}/permissions')
+
+# Invoice Signatures
+def list_signatures():
+    p = {}
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/signatures/", params=p)
+
+def get_active_signature():
+    p = {}
+    c = _cid()
+    if c: p["company_id"] = c
+    try:
+        return _get("/signatures/active", params=p)
+    except Exception:
+        return None
+
+def upload_signature(name, image_data):
+    return _post("/signatures/", {"name": name, "image_data": image_data})
+
+def activate_signature(sig_id):
+    return _post(f"/signatures/{sig_id}/activate", {})
+
+def delete_signature(sig_id):
+    return _delete(f"/signatures/{sig_id}")
+
+
+# Transports
+def list_transports():
+    p = {}
+    c = _cid()
+    if c: p["company_id"] = c
+    return _get("/transports/", params=p)
+
+def create_transporter(data):
+    data["company_id"] = _cid()
+    return _post("/transports/", data)
+
+def get_transporter(tid):
+    return _get(f"/transports/{tid}")
+
+def update_transporter(tid, d):
+    return _put(f"/transports/{tid}", d)
+
+def delete_transporter(tid):
+    return _delete(f"/transports/{tid}")
+
+
+def set_db_path(path):
+    return _post("/settings/db-path", {"db_path": path})
+
+
 
